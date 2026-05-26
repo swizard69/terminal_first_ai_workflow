@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: ai-vault-link [REPO_DIR] [--name NAME] [--all] [--dry-run]
+
+Symlink <repo>/docs/ai/ into the Obsidian vault under Projects/<name>/.
+Repo docs stay the source of truth; the vault aggregates via links.
+
+Default REPO_DIR: current directory.
+Default vault:    $VAULT or ~/obsidian/AI-Knowledge
+
+  --name     vault folder name (default: basename of REPO_DIR)
+  --all      link every repo under AI_WORK_ROOT with docs/ai/
+  --dry-run  show links without creating them
+
+Examples:
+  ai-vault-link $AI_WORK_ROOT/my-app
+  ai-vault-link --all
+  VAULT=~/notes/AI-Knowledge ai-vault-link ./platform --name platform
+EOF
+  exit 1
+}
+
+VAULT="${VAULT:-$HOME/obsidian/AI-Knowledge}"
+WORK_ROOT="${AI_WORK_ROOT:-$HOME/projects}"
+WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+MODE=""
+TARGET=""
+NAME=""
+DRY_RUN=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --all)     MODE=all; shift ;;
+    --name)    NAME="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=true; shift ;;
+    -h|--help) usage ;;
+    *)
+      if [ -z "$TARGET" ]; then
+        TARGET="$(cd "$1" && pwd)"
+      else
+        usage
+      fi
+      shift
+      ;;
+  esac
+done
+
+link_repo() {
+  local repo="$1"
+  local name="${2:-$(basename "$repo")}"
+  local src="$repo/docs/ai"
+  local dst="$VAULT/Projects/$name"
+
+  if [ ! -d "$src" ]; then
+    echo "skip: $name — missing $src (run bootstrap-project first?)" >&2
+    return 1
+  fi
+
+  if [ -L "$dst" ] && [ "$(readlink -f "$dst")" = "$(readlink -f "$src")" ]; then
+    echo "ok:   $dst -> $src"
+    return 0
+  fi
+
+  if [ "$DRY_RUN" = true ]; then
+    echo "would link: $dst -> $src"
+    return 0
+  fi
+
+  mkdir -p "$VAULT/Projects"
+  ln -sfn "$src" "$dst"
+  echo "link: $dst -> $src"
+}
+
+if [ "$MODE" = "all" ]; then
+  echo "=== ai-vault-link --all ==="
+  echo "vault: $VAULT"
+  echo "scan:  $WORK_ROOT"
+  echo
+  found=0
+  linked=0
+  for repo in "$WORK_ROOT"/*; do
+    [ -d "$repo" ] || continue
+    [ "$repo" = "$WF" ] && continue
+    [ -d "$repo/docs/ai" ] || continue
+    found=$((found + 1))
+    if link_repo "$repo"; then
+      linked=$((linked + 1))
+    fi
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "(no repos with docs/ai/ under $WORK_ROOT)"
+  else
+    echo
+    echo "summary: linked=$linked repos=$found"
+  fi
+  exit 0
+fi
+
+if [ -z "$TARGET" ]; then
+  TARGET="$(pwd)"
+fi
+
+[ -n "$NAME" ] || NAME="$(basename "$TARGET")"
+
+echo "=== ai-vault-link ==="
+echo "repo:  $TARGET"
+echo "name:  $NAME"
+echo "vault: $VAULT"
+[ "$DRY_RUN" = true ] && echo "mode:  dry-run"
+echo
+
+link_repo "$TARGET" "$NAME"

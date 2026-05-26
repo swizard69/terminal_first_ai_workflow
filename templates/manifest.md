@@ -1,0 +1,15 @@
+project_name={{PROJECT_NAME}}
+repo_access=private-solo
+project_type={{PROJECT_TYPE}}
+framework_version=1.0.0
+# git_flow=mr              # default: ai/<task> branches, optional ai-ship --mr
+# git_flow=direct-master   # private-solo only: ai-ship may push master, no MR
+# php_lint_image=project-web:latest
+# php_lint_workdir=/var/www/html
+# python_lint_image=project-app:latest
+# python_lint_workdir=/app
+# node_lint_image=project-node:20
+# node_lint_workdir=/app
+# node_lint_cmd=npm run lint
+# node_typecheck_cmd=npm run typecheck
+# node_lint_typecheck=1

@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Host setup for dev machine / remote compute runtime.
+# Run once: ~/projects/terminal_first_ai_workflow/scripts/bootstrap-host
+
+WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MARKER="# >>> terminal-ai-workflow"
+BASHRC="${HOME}/.bashrc"
+
+echo "=== bootstrap-host ==="
+echo "workflow: $WF"
+
+mkdir -p "$HOME/.ai/logs" "$HOME/ai/prompts" "$HOME/obsidian/AI-Knowledge"
+
+if [ ! -f "$HOME/ai/global-rules.md" ]; then
+  cat > "$HOME/ai/global-rules.md" <<'EOF'
+# Global AI rules (personal, not in git)
+
+- Prefer terminal agents on dev-ai over IDE agents.
+- One tmux session = one AI_TASK.
+- Update task snapshot before detach.
+- No prod writes from agent shell.
+EOF
+fi
+
+for f in debug refactor review; do
+  [ -f "$HOME/ai/prompts/${f}.md" ] || echo "# ${f} prompt template" > "$HOME/ai/prompts/${f}.md"
+done
+
+if [ ! -f "$HOME/ai/vue-nuxt-style.md" ]; then
+  cp "$WF/templates/ai/vue-nuxt-style.md" "$HOME/ai/vue-nuxt-style.md"
+  echo "ai: $HOME/ai/vue-nuxt-style.md"
+fi
+
+ln -sf "$WF/config/tmux.conf" "$HOME/.tmux.conf"
+echo "tmux: $HOME/.tmux.conf -> config/tmux.conf"
+
+if ! grep -qF "$MARKER" "$BASHRC" 2>/dev/null; then
+  cat >> "$BASHRC" <<EOF
+
+$MARKER
+export AI_WORK_ROOT="\${AI_WORK_ROOT:-\$HOME/projects}"
+export PATH="$HOME/.local/bin:$WF/scripts:\$PATH"
+# <<< terminal-ai-workflow
+EOF
+  echo "updated: $BASHRC"
+else
+  echo "bashrc: already configured"
+fi
+
+chmod +x "$WF"/scripts/*
+echo
+echo "=== done ==="
+echo "  source ~/.bashrc"
+echo "  tmux new -s test"
+echo "  ai-sessions"
+echo
+echo "CLI (install separately if missing):"
+echo "  glab    — GitLab CLI"
+echo "  claude  — npm i -g @anthropic-ai/claude-code"
+echo "  codex   — npm i -g @openai/codex"

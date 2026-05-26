@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TASK="${AI_TASK:-}"
+if [ -z "$TASK" ] && [ -n "${TMUX:-}" ]; then
+  TASK="$(tmux display-message -p '#S')"
+  export AI_TASK="$TASK"
+fi
+
+if [ -n "$TASK" ]; then
+  SNAP=".ai/snapshots/${TASK}.md"
+else
+  SNAP=".ai/SNAPSHOT.md"
+fi
+
+[ -f "$SNAP" ] || { echo "error: missing $SNAP — run ai-start first" >&2; exit 1; }
+
+if command -v ai-index-event >/dev/null 2>&1; then
+  ai-index-event finish
+elif [ -x "$ROOT/scripts/ai-index-event" ]; then
+  "$ROOT/scripts/ai-index-event" finish
+fi
+
+echo "=== ai-finish ==="
+echo "snapshot: $SNAP"
+echo
+echo "Checklist:"
+echo "  1. run focused tests (scripts/ai-test if available)"
+echo "  2. inspect diff: git diff --stat"
+echo "  3. merge .ai/handoff/${TASK:-*}/ into snapshot if present"
+echo "  4. update last_update + ## Last Validation in $SNAP"
+echo "  5. update .ai/active-tasks.md when using parallel snapshots"
+echo "  6. commit snapshot only when manifest repo_access allows"
+echo
+echo "Auto ship (commit+push): scripts/ai-ship -m \"type(scope): summary\" [--mr]"
+echo
+git diff --stat 2>/dev/null || true

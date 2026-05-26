@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Framework smoke tests — run via ai-ship and CI.
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+echo "=== ai-test.local: bash syntax ==="
+for f in "$ROOT"/scripts/*; do
+  [ -f "$f" ] || continue
+  bash -n "$f"
+done
+echo "ok: $(find "$ROOT/scripts" -maxdepth 1 -type f | wc -l) scripts"
+
+echo "=== ai-test.local: help smoke ==="
+for cmd in ai-context ai-ship ai-test php-lint python-lint node-lint; do
+  "./scripts/$cmd" --help &>/dev/null || true
+done
+for cmd in ai-finish ai-start ai-brief; do
+  "./scripts/$cmd" --help >/dev/null 2>&1 || "./scripts/$cmd" -h >/dev/null 2>&1 || true
+done
+
+echo "=== ai-test.local: global helpers ==="
+for cmd in ai-session ai-task ai-sessions ai-vault-link ai-openclaw-check; do
+  "$ROOT/scripts/$cmd" --help >/dev/null 2>&1 || true
+done
+
+echo "=== ai-test.local: dry-run ==="
+./scripts/ai-ship --dry-run --no-test -m "test" 2>/dev/null || true
+
+echo "=== ai-test.local: openclaw check ==="
+"$ROOT/scripts/ai-openclaw-check" "$ROOT"
+
+echo "=== ai-test.local: done ==="

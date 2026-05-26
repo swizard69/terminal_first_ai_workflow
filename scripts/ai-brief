@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Lightweight briefing for Codex SessionStart hook and humans.
+# No index.jsonl — use scripts/ai-start for full lifecycle.
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$ROOT"
+
+TASK="${AI_TASK:-}"
+if [ -z "$TASK" ] && [ -n "${TMUX:-}" ]; then
+  TASK="$(tmux display-message -p '#S' 2>/dev/null || true)"
+fi
+
+echo "=== AI briefing ==="
+echo "repo:   $(basename "$ROOT")"
+echo "branch: $(git branch --show-current 2>/dev/null || echo unknown)"
+[ -n "$TASK" ] && echo "task:   $TASK"
+echo
+
+echo "Rules: read AGENTS.md first. Obey docs/ai/*. No prod deploy."
+echo
+
+echo "read order:"
+if [ -x ./scripts/ai-context ]; then
+  ./scripts/ai-context
+elif command -v ai-context >/dev/null 2>&1; then
+  ai-context
+fi
+
+SNAP=""
+if [ -n "$TASK" ] && [ -f ".ai/snapshots/${TASK}.md" ]; then
+  SNAP=".ai/snapshots/${TASK}.md"
+elif [ -f .ai/SNAPSHOT.md ]; then
+  SNAP=.ai/SNAPSHOT.md
+fi
+
+if [ -n "$SNAP" ]; then
+  echo
+  echo "--- snapshot ($SNAP) ---"
+  cat "$SNAP"
+fi
+
+echo
+echo "After changes: ./scripts/ai-test.local, update snapshot, scripts/ai-ship -m \"...\" [--mr] (or ai-finish before detach)."

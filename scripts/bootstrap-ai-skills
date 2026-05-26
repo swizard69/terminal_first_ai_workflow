@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: bootstrap-ai-skills [--global] [--project NAME] [TARGET_DIR]
+
+Install canonical skills from terminal_ai_workflow templates:
+
+  --global          copy templates/skills/global/* → ~/ai/skills/
+  --project NAME    copy templates/skills/project/NAME/* → TARGET/.ai/skills/
+
+Defaults (no flags): --global + --project <basename(TARGET)> if profile exists.
+
+Examples:
+  bootstrap-ai-skills --global
+  bootstrap-ai-skills --project example $AI_WORK_ROOT/my-app
+  bootstrap-ai-skills $AI_WORK_ROOT/my-app
+EOF
+  exit 1
+}
+
+WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TPL="$WF/templates/skills"
+GLOBAL=false
+PROJECT=""
+TARGET=""
+RUN_GLOBAL=false
+RUN_PROJECT=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --global)  RUN_GLOBAL=true; shift ;;
+    --project) PROJECT="${2:?}"; RUN_PROJECT=true; shift 2 ;;
+    -h|--help) usage ;;
+    *)
+      TARGET="$(cd "$1" && pwd)"
+      shift
+      ;;
+  esac
+done
+
+if [ "$RUN_GLOBAL" = false ] && [ "$RUN_PROJECT" = false ]; then
+  RUN_GLOBAL=true
+  if [ -n "$TARGET" ]; then
+    RUN_PROJECT=true
+    [ -n "$PROJECT" ] || PROJECT="$(basename "$TARGET")"
+  fi
+fi
+
+install_skill_tree() {
+  local src_root="$1" dst_root="$2" label="$3"
+  local skill src dst name
+  local count=0
+
+  if [ ! -d "$src_root" ]; then
+    echo "  skip: no profile at $src_root"
+    return 0
+  fi
+
+  mkdir -p "$dst_root"
+  while IFS= read -r skill; do
+    name="$(basename "$(dirname "$skill")")"
+    src="$skill"
+    dst="$dst_root/$name/SKILL.md"
+    if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+      echo "  ok:   $name"
+    elif [ -f "$dst" ]; then
+      cp "$src" "$dst"
+      echo "  update: $name"
+    else
+      mkdir -p "$(dirname "$dst")"
+      cp "$src" "$dst"
+      echo "  add:  $name"
+    fi
+    count=$((count + 1))
+  done < <(find "$src_root" -mindepth 2 -maxdepth 2 -name SKILL.md | sort)
+
+  if [ "$count" -eq 0 ]; then
+    echo "  (no skills in $label)"
+  fi
+}
+
+if [ "$RUN_GLOBAL" = true ]; then
+  echo "=== bootstrap-ai-skills: global → ~/ai/skills ==="
+  install_skill_tree "$TPL/global" "$HOME/ai/skills" "global"
+  echo
+fi
+
+if [ "$RUN_PROJECT" = true ]; then
+  [ -n "$TARGET" ] || TARGET="$(pwd)"
+  TARGET="$(cd "$TARGET" && pwd)"
+  [ -n "$PROJECT" ] || PROJECT="$(basename "$TARGET")"
+
+  echo "=== bootstrap-ai-skills: project $PROJECT → $TARGET/.ai/skills ==="
+  mkdir -p "$TARGET/.ai/skills"
+  install_skill_tree "$TPL/project/$PROJECT" "$TARGET/.ai/skills" "project/$PROJECT"
+
+  if [ -x "$TARGET/scripts/ai-sync-skills" ]; then
+    echo
+    (cd "$TARGET" && ./scripts/ai-sync-skills --write)
+  fi
+  echo
+fi
+
+echo "=== done ==="
+echo "Global:  ~/ai/skills/"
+[ -n "${TARGET:-}" ] && echo "Project: $TARGET/.ai/skills/"
+echo "Claude:  run scripts/ai-sync-skills --write in project (if not already)"
+echo "Discover: scripts/ai-context lists skill paths"

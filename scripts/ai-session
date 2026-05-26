@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: ai-session <task-id> [repo-dir] [--project NAME] [--agent claude|codex] [--layout]
+
+Examples:
+  ai-session mr-1234 ~/work/platform-backend --project platform-backend --agent claude
+  ai-session fix-login $AI_WORK_ROOT/my-app --project example --agent claude --layout
+  ai-session ops-prod-ro
+EOF
+  exit 1
+}
+
+TASK="${1:-}"
+[ -n "$TASK" ] || usage
+shift
+
+REPO="."
+PROJECT=""
+AGENT=""
+LAYOUT=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --project) PROJECT="${2:?}"; shift 2 ;;
+    --agent)   AGENT="${2:?}"; shift 2 ;;
+    --layout)  LAYOUT=true; shift ;;
+    -h|--help) usage ;;
+    *)
+      if [ "$REPO" = "." ] && [ -d "$1" ]; then
+        REPO="$1"
+        shift
+      else
+        usage
+      fi
+      ;;
+  esac
+done
+
+REPO="$(cd "$REPO" && pwd)"
+
+if tmux has-session -t "$TASK" 2>/dev/null; then
+  exec tmux attach -t "$TASK"
+fi
+
+tmux new-session -ds "$TASK" -c "$REPO"
+tmux set-environment -t "$TASK" AI_TASK "$TASK"
+tmux set-environment -t "$TASK" TMUX_SESSION "$TASK"
+[ -n "$PROJECT" ] && tmux set-environment -t "$TASK" AI_PROJECT "$PROJECT"
+[ -n "$AGENT" ]   && tmux set-environment -t "$TASK" AI_AGENT "$AGENT"
+[ -n "$PROJECT" ] && tmux set-option -t "$TASK" @ai_project "$PROJECT"
+[ -n "$AGENT" ]   && tmux set-option -t "$TASK" @ai_agent "$AGENT"
+
+if [ "$LAYOUT" = true ]; then
+  WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  "$WF/scripts/ai-tmux-layout" --session "$TASK" --repo "$REPO"
+fi
+
+exec tmux attach -t "$TASK"

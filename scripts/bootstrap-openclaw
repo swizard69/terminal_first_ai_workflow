@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: bootstrap-openclaw [--install] [--check REPO_DIR] [--force-config]
+
+Homelab-only helper for optional OpenClaw (dev-ai / dev-server).
+Run after ai-openclaw-check passes on a pilot repo.
+
+  --install       npm install -g openclaw@latest
+  --check REPO    run ai-openclaw-check on REPO first (default: cwd)
+  --force-config  overwrite ~/.openclaw/openclaw.json from template
+
+Does not run openclaw onboard — that stays interactive on homelab.
+
+Next steps after bootstrap:
+  openclaw onboard --install-daemon
+  openclaw gateway status
+  ai-openclaw-agent <task> <repo> --message "Continue per snapshot"
+EOF
+  exit 1
+}
+
+WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TPL="$WF/templates/openclaw/openclaw.json"
+WORK_ROOT="${AI_WORK_ROOT:-$HOME/projects}"
+OC_DIR="${HOME}/.openclaw"
+OC_CFG="${OC_DIR}/openclaw.json"
+
+INSTALL=false
+FORCE_CONFIG=false
+CHECK_REPO=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --install)       INSTALL=true; shift ;;
+    --force-config)  FORCE_CONFIG=true; shift ;;
+    --check)
+      CHECK_REPO="$(cd "${2:?}" && pwd)"
+      shift 2
+      ;;
+    -h|--help) usage ;;
+    *) usage ;;
+  esac
+done
+
+[ -n "$CHECK_REPO" ] || CHECK_REPO="$(pwd)"
+
+echo "=== bootstrap-openclaw ==="
+echo "homelab helper — do not run OpenClaw gateway on Mac for steady state"
+echo "pilot repo: $CHECK_REPO"
+echo "workspace:  $WORK_ROOT"
+echo
+
+if ! "$WF/scripts/ai-openclaw-check" "$CHECK_REPO"; then
+  echo >&2
+  echo "Fix checklist failures before installing OpenClaw." >&2
+  exit 1
+fi
+
+if [ "$INSTALL" = true ]; then
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "fail: npm not found — install Node.js on dev-ai first" >&2
+    exit 1
+  fi
+  echo "=== npm install -g openclaw@latest ==="
+  npm install -g openclaw@latest
+  echo
+fi
+
+mkdir -p "$OC_DIR"
+
+if [ -f "$OC_CFG" ] && [ "$FORCE_CONFIG" = false ]; then
+  echo "config: keep existing $OC_CFG"
+else
+  if [ ! -f "$TPL" ]; then
+    echo "fail: missing template $TPL" >&2
+    exit 1
+  fi
+  sed "s|{{AI_WORK_ROOT}}|$WORK_ROOT|g" "$TPL" > "$OC_CFG"
+  echo "config: wrote $OC_CFG (workspace=$WORK_ROOT, agent dev only)"
+fi
+
+echo
+echo "=== done ==="
+echo "  openclaw onboard --install-daemon"
+echo "  openclaw gateway status && openclaw doctor"
+echo "  ai-openclaw-check --gateway $CHECK_REPO"
+echo "  ai-openclaw-agent <task> $CHECK_REPO --message \"...\""
+echo
+echo "Full guide: docs/workflow/06-homelab-openclaw.md"

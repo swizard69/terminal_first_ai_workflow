@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: ai-tmux-layout [--session NAME] [--repo DIR]
+
+3-pane layout for AI task sessions:
+  top-left  agent (claude / codex)
+  top-right tests
+  bottom-left git / glab
+
+Run from inside tmux, or pass --session (and optional --repo).
+Idempotent: skips if session already has 3+ panes.
+EOF
+  exit 1
+}
+
+SESSION=""
+REPO=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --session) SESSION="$2"; shift 2 ;;
+    --repo)    REPO="$2"; shift 2 ;;
+    -h|--help) usage ;;
+    *) usage ;;
+  esac
+done
+
+if [ -z "$SESSION" ]; then
+  if [ -n "${TMUX:-}" ]; then
+    SESSION="$(tmux display-message -p '#S')"
+  elif [ -n "${AI_TASK:-}" ]; then
+    SESSION="$AI_TASK"
+  else
+    echo "error: not in tmux — use --session <name>" >&2
+    exit 1
+  fi
+fi
+
+if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+  echo "error: tmux session '$SESSION' not found" >&2
+  exit 1
+fi
+
+if [ -z "$REPO" ]; then
+  REPO="$(tmux display-message -p -t "$SESSION" '#{pane_current_path}')"
+fi
+REPO="$(cd "$REPO" && pwd)"
+
+PANE_COUNT="$(tmux list-panes -t "$SESSION" 2>/dev/null | wc -l | tr -d ' ')"
+if [ "${PANE_COUNT:-0}" -ge 3 ]; then
+  echo "layout: session '$SESSION' already has $PANE_COUNT panes — skip"
+  tmux select-pane -t "$SESSION" -T agent 2>/dev/null || true
+  exit 0
+fi
+
+WIN="$(tmux list-windows -t "$SESSION" -F '#{window_index}' | head -1)"
+TARGET="${SESSION}:${WIN}"
+
+# pane 1 agent | pane 2 tests (right) | pane 3 git (bottom-left)
+tmux split-window -h -t "$TARGET" -c "$REPO"
+tmux select-pane -t "${TARGET}.1"
+tmux split-window -v -t "${TARGET}.1" -c "$REPO"
+
+AGENT="${AI_AGENT:-claude}"
+tmux select-pane -t "${TARGET}.1" -T agent
+tmux select-pane -t "${TARGET}.2" -T tests
+tmux select-pane -t "${TARGET}.3" -T git
+
+tmux send-keys -t "${TARGET}.2" "cd '$REPO' && clear && echo '=== tests ===' && if [ -x ./scripts/ai-test.local ]; then ./scripts/ai-test.local; elif [ -x ./scripts/ai-test ]; then ./scripts/ai-test; else echo 'run: ./scripts/ai-test.local'; fi" C-m
+
+tmux send-keys -t "${TARGET}.3" "cd '$REPO' && clear && echo '=== git ===' && git status -sb && echo && echo '=== glab ===' && command -v glab >/dev/null && glab mr list 2>/dev/null | head -20 || echo 'glab mr list'" C-m
+
+tmux select-pane -t "${TARGET}.1"
+tmux send-keys -t "${TARGET}.1" "cd '$REPO' && clear && echo '=== agent pane ===' && echo 'AI_TASK=${AI_TASK:-?}  agent: $AGENT' && echo 'run: scripts/ai-start && $AGENT'" C-m
+
+echo "layout: $SESSION — panes agent | tests | git (repo: $REPO)"

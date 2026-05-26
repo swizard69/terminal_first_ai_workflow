@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: ai-openclaw-check [REPO_DIR] [--all] [--gateway]
+
+Verify OpenClaw entry criteria before enabling the gateway on homelab (dev-ai).
+Does not install OpenClaw — use bootstrap-openclaw for that.
+
+Default REPO_DIR: current directory.
+
+  --all      check every bootstrapped repo under AI_WORK_ROOT
+  --gateway  also require openclaw CLI + gateway running
+
+Exit 0 when all required checks pass; 1 otherwise.
+EOF
+  exit 1
+}
+
+WORK_ROOT="${AI_WORK_ROOT:-$HOME/projects}"
+WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+MODE=""
+TARGET=""
+GATEWAY=false
+FAIL=0
+PASS=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --all)     MODE=all; shift ;;
+    --gateway) GATEWAY=true; shift ;;
+    -h|--help) usage ;;
+    *)
+      if [ -z "$TARGET" ]; then
+        TARGET="$(cd "$1" && pwd)"
+      else
+        usage
+      fi
+      shift
+      ;;
+  esac
+done
+
+ok() {
+  echo "  ok:   $1"
+  PASS=$((PASS + 1))
+}
+
+bad() {
+  echo "  fail: $1" >&2
+  FAIL=$((FAIL + 1))
+}
+
+warn() {
+  echo "  warn: $1"
+}
+
+check_repo() {
+  local repo="$1"
+  local name start_fail repo_fail
+  name="$(basename "$repo")"
+  start_fail=$FAIL
+
+  echo "=== $name ($repo) ==="
+
+  for f in AGENTS.md manifest.md; do
+    if [ -f "$repo/$f" ]; then ok "$f"; else bad "missing $f"; fi
+  done
+
+  if [ -d "$repo/docs/ai" ]; then
+    ok "docs/ai/"
+  else
+    bad "missing docs/ai/ (bootstrap-project?)"
+  fi
+
+  for s in ai-start ai-ship ai-finish ai-context; do
+    if [ -x "$repo/scripts/$s" ] || [ -f "$repo/scripts/$s" ]; then
+      ok "scripts/$s"
+    else
+      bad "missing scripts/$s (sync-ai-scripts?)"
+    fi
+  done
+
+  if [ -d "$repo/.ai/snapshots" ] || [ -f "$repo/.ai/SNAPSHOT.md" ]; then
+    ok "snapshot storage (.ai/snapshots/ or SNAPSHOT.md)"
+  else
+    bad "missing .ai/snapshots/ or .ai/SNAPSHOT.md"
+  fi
+
+  if command -v glab >/dev/null 2>&1; then
+    if glab auth status >/dev/null 2>&1; then ok "glab auth"; else warn "glab installed but not authenticated"; fi
+  elif command -v gh >/dev/null 2>&1; then
+    if gh auth status >/dev/null 2>&1; then ok "gh auth"; else warn "gh installed but not authenticated"; fi
+  else
+    warn "no glab/gh — MR loop needs GitLab or GitHub CLI on homelab"
+  fi
+
+  repo_fail=$((FAIL - start_fail))
+  echo "  repo: fail=$repo_fail"
+  echo
+  [ "$repo_fail" -eq 0 ]
+}
+
+check_host() {
+  echo "=== host (homelab / dev-ai) ==="
+
+  if command -v tmux >/dev/null 2>&1; then ok "tmux"; else bad "tmux not installed"; fi
+  if command -v ai-session >/dev/null 2>&1 || [ -x "$WF/scripts/ai-session" ]; then
+    ok "ai-session in PATH"
+  else
+    bad "ai-session not in PATH (bootstrap-host?)"
+  fi
+
+  if [ -d "$WORK_ROOT" ]; then ok "AI_WORK_ROOT=$WORK_ROOT"; else bad "AI_WORK_ROOT missing: $WORK_ROOT"; fi
+
+  if [ "$GATEWAY" = true ]; then
+    if command -v openclaw >/dev/null 2>&1; then
+      ok "openclaw CLI"
+      if openclaw gateway status >/dev/null 2>&1; then
+        ok "openclaw gateway running"
+      else
+        bad "openclaw gateway not running (openclaw onboard --install-daemon?)"
+      fi
+      if openclaw doctor >/dev/null 2>&1; then ok "openclaw doctor"; else warn "openclaw doctor reported issues"; fi
+    else
+      bad "openclaw CLI not installed (bootstrap-openclaw --install?)"
+    fi
+  else
+    if command -v openclaw >/dev/null 2>&1; then
+      warn "openclaw installed — use --gateway to verify daemon"
+    else
+      echo "  info: openclaw not installed (expected before optional OpenClaw setup)"
+    fi
+  fi
+
+  echo
+}
+
+if [ "$MODE" = "all" ]; then
+  echo "=== ai-openclaw-check --all ==="
+  echo "scan: $WORK_ROOT"
+  echo
+  check_host
+  found=0
+  for repo in "$WORK_ROOT"/*; do
+    [ -d "$repo" ] || continue
+    [ "$repo" = "$WF" ] && continue
+    [ -f "$repo/AGENTS.md" ] || continue
+    found=$((found + 1))
+    check_repo "$repo" || true
+  done
+  if [ "$found" -eq 0 ]; then
+    bad "no bootstrapped repos under $WORK_ROOT"
+  fi
+else
+  if [ -z "$TARGET" ]; then
+    TARGET="$(pwd)"
+  fi
+  echo "=== ai-openclaw-check ==="
+  echo "repo: $TARGET"
+  echo
+  check_host
+  check_repo "$TARGET" || true
+fi
+
+echo "summary: ok=$PASS fail=$FAIL"
+if [ "$FAIL" -gt 0 ]; then
+  echo "OpenClaw not ready — stabilize tmux + MR loop first." >&2
+  echo "See docs/workflow/06-homelab-openclaw.md#openclaw-entry-criteria" >&2
+  exit 1
+fi
+
+echo "Ready for OpenClaw (optional). Next: bootstrap-openclaw --install"
+exit 0

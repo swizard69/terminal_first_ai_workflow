@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: ai-openclaw-agent <task-id> <repo-dir> --message MSG [--agent dev] [--no-start]
+
+Dispatch an OpenClaw turn aligned with this framework:
+  AI_TASK == session-key == tmux session name == snapshot file stem
+
+Runs scripts/ai-start in the repo unless --no-start.
+Warns if tmux session for task-id is missing (long work should use tmux).
+
+Examples:
+  ai-openclaw-agent fix-login $AI_WORK_ROOT/my-app \
+    --message "Continue JWT fix per snapshot. Run ai-test. Update snapshot before stop."
+
+  ai-task fix-login $AI_WORK_ROOT/my-app --agent claude --layout
+  ai-openclaw-agent fix-login $AI_WORK_ROOT/my-app --message "Steer from gateway"
+
+Requires: openclaw CLI + gateway on homelab (bootstrap-openclaw).
+EOF
+  exit 1
+}
+
+TASK="${1:-}"
+REPO="${2:-}"
+[ -n "$TASK" ] && [ -n "$REPO" ] || usage
+shift 2
+
+AGENT="dev"
+MESSAGE=""
+NO_START=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --agent)     AGENT="${2:?}"; shift 2 ;;
+    --message)   MESSAGE="${2:?}"; shift 2 ;;
+    --no-start)  NO_START=true; shift ;;
+    -h|--help)   usage ;;
+    *) usage ;;
+  esac
+done
+
+[ -n "$MESSAGE" ] || usage
+
+if ! command -v openclaw >/dev/null 2>&1; then
+  echo "fail: openclaw not in PATH — run bootstrap-openclaw --install on dev-ai" >&2
+  exit 1
+fi
+
+REPO="$(cd "$REPO" && pwd)"
+PROJECT="$(basename "$REPO")"
+
+export AI_TASK="$TASK"
+export AI_PROJECT="$PROJECT"
+
+echo "=== ai-openclaw-agent ==="
+echo "task:    $TASK"
+echo "repo:    $REPO"
+echo "agent:   $AGENT"
+echo "session: agent:${AGENT}:${TASK}"
+echo
+
+if ! tmux has-session -t "$TASK" 2>/dev/null; then
+  echo "warn: no tmux session '$TASK' — for long implementation runs:" >&2
+  echo "  ai-task $TASK $REPO --agent claude --layout" >&2
+  echo
+fi
+
+if [ "$NO_START" = false ]; then
+  if [ -x "$REPO/scripts/ai-start" ]; then
+    (cd "$REPO" && ./scripts/ai-start)
+  else
+    echo "warn: missing $REPO/scripts/ai-start" >&2
+  fi
+fi
+
+exec openclaw agent \
+  --agent "$AGENT" \
+  --session-key "$TASK" \
+  --message "$MESSAGE"

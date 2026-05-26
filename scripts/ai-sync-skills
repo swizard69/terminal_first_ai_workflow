@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODE="${1:-check}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SKILLS_DIR=".ai/skills"
+
+if [ ! -d "$SKILLS_DIR" ]; then
+  echo "no $SKILLS_DIR — nothing to sync"
+  exit 0
+fi
+
+echo "=== ai-sync-skills ($MODE) ==="
+count=0
+while IFS= read -r skill; do
+  count=$((count + 1))
+  name="$(basename "$(dirname "$skill")")"
+  echo "  $name"
+  if [ "$MODE" = "--write" ] && [ -d .claude ]; then
+    mkdir -p ".claude/skills/$name"
+    cp "$skill" ".claude/skills/$name/SKILL.md"
+  fi
+done < <(find "$SKILLS_DIR" -mindepth 2 -name SKILL.md | sort)
+
+if [ "$count" -eq 0 ]; then
+  echo "(no skills found)"
+fi
+
+if [ "$MODE" = "--write" ]; then
+  echo "synced to .claude/skills/ where applicable"
+else
+  echo "use --write to copy into .claude/skills/"
+fi

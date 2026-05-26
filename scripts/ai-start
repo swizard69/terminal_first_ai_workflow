@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TASK="${AI_TASK:-}"
+if [ -z "$TASK" ] && [ -n "${TMUX:-}" ]; then
+  TASK="$(tmux display-message -p '#S')"
+  export AI_TASK="$TASK"
+fi
+EVENT="start"
+
+if [ -z "$TASK" ]; then
+  if [ -f .ai/SNAPSHOT.md ] && [ ! -d .ai/snapshots ]; then
+    SNAP=.ai/SNAPSHOT.md
+  else
+    echo "error: set AI_TASK or use single-task .ai/SNAPSHOT.md" >&2
+    echo "hint: export AI_TASK=<task>  or  ai-session <task>  (session name == AI_TASK)" >&2
+    exit 1
+  fi
+else
+  SNAP=".ai/snapshots/${TASK}.md"
+  mkdir -p .ai/snapshots ".ai/handoff/${TASK}"
+  if [ -f "$SNAP" ]; then
+    EVENT="attach"
+  else
+    NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    cat > "$SNAP" <<EOF
+# Task Snapshot
+
+task: ${TASK}
+owner: ${AI_AGENT:-unknown}
+branch: $(git branch --show-current 2>/dev/null || echo unknown)
+repo: $(basename "$(pwd)")
+started_at: ${NOW}
+last_update: ${NOW}
+
+## Current State
+(started)
+
+## Done
+
+## In Progress
+
+## Known Issues
+
+## Next Steps
+
+## Last Validation
+EOF
+  fi
+fi
+
+CURRENT_BRANCH="$(git branch --show-current 2>/dev/null || echo unknown)"
+
+# Keep snapshot branch/last_update in sync with real git (attach/resume).
+if [ -f "$SNAP" ]; then
+  NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if grep -q '^branch:' "$SNAP"; then
+    sed -i "s/^branch:.*/branch: ${CURRENT_BRANCH}/" "$SNAP"
+  fi
+  if grep -q '^last_update:' "$SNAP"; then
+    sed -i "s/^last_update:.*/last_update: ${NOW}/" "$SNAP"
+  fi
+fi
+
+if command -v ai-index-event >/dev/null 2>&1; then
+  ai-index-event "$EVENT"
+elif [ -x "$ROOT/scripts/ai-index-event" ]; then
+  "$ROOT/scripts/ai-index-event" "$EVENT"
+fi
+
+echo "=== ai-start ==="
+echo "snapshot: $SNAP"
+echo "branch:   ${CURRENT_BRANCH}"
+echo "status:"
+git status -sb 2>/dev/null || true
+
+case "$CURRENT_BRANCH" in
+  main|master)
+    if [ -n "$TASK" ]; then
+      DIRECT=false
+      if [ -f manifest.md ] && grep -q '^repo_access=private-solo' manifest.md && grep -q '^git_flow=direct-master' manifest.md; then
+        DIRECT=true
+      fi
+      echo
+      if [ "$DIRECT" = true ]; then
+        echo "note: git_flow=direct-master — ship from master ok after staging test" >&2
+        echo "hint: parallel tasks still prefer ai/<task> branches" >&2
+      else
+        echo "warn: AI_TASK=$TASK but git is on protected branch '$CURRENT_BRANCH'" >&2
+        echo "hint: new work → ai-task <new-task-name> <repo> --agent codex --layout" >&2
+        echo "      or:  git checkout -b ai/${TASK}" >&2
+      fi
+    fi
+    ;;
+esac
+
+echo
+echo "read order:"
+if command -v ai-context >/dev/null 2>&1; then
+  ai-context
+elif [ -x ./scripts/ai-context ]; then
+  ./scripts/ai-context
+elif [ -x "$ROOT/scripts/ai-context" ]; then
+  "$ROOT/scripts/ai-context"
+fi
+echo
+echo "--- snapshot ---"
+cat "$SNAP"

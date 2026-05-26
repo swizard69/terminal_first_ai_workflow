@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Copy to scripts/ai-test.local for frontend / Node projects (Vue, Nuxt, React, Vite).
+
+echo "=== node lint + typecheck ==="
+if [ -x ./scripts/node-lint ]; then
+  ./scripts/node-lint --typecheck
+else
+  echo "warn: scripts/node-lint missing — run sync-ai-scripts" >&2
+fi
+
+if [ -f package.json ] && command -v npm >/dev/null 2>&1; then
+  if node -e "const p=require('./package.json'); process.exit(p.scripts&&p.scripts.test?0:1)" 2>/dev/null; then
+    echo "=== npm test ==="
+    npm test
+  else
+    echo "warn: no npm test script — add one or extend ai-test.local" >&2
+  fi
+fi
+
+if command -v docker >/dev/null 2>&1 && [ -f docker-compose.yml ]; then
+  echo "=== docker compose config ==="
+  docker compose config -q 2>/dev/null || docker compose config >/dev/null
+fi
+
+echo "ok: frontend smoke checks passed"

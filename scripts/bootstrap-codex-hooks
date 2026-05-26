@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: bootstrap-codex-hooks [TARGET_DIR]
+
+Installs .codex/hooks.json + hooks/ for Codex SessionStart briefing.
+Requires repo trust in Codex (/hooks → trust).
+
+Also ensures scripts/ai-brief exists in project.
+EOF
+  exit 1
+}
+
+WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TARGET="$(pwd)"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage ;;
+    *)
+      TARGET="$(cd "$1" && pwd)"
+      shift
+      ;;
+  esac
+done
+
+echo "=== bootstrap-codex-hooks ==="
+echo "target: $TARGET"
+
+mkdir -p "$TARGET/.codex/hooks" "$TARGET/scripts"
+
+if [ ! -f "$TARGET/scripts/ai-brief" ]; then
+  cp "$WF/scripts/ai-brief" "$TARGET/scripts/ai-brief"
+  chmod +x "$TARGET/scripts/ai-brief"
+  echo "  create: scripts/ai-brief"
+else
+  echo "  skip: scripts/ai-brief"
+fi
+
+install -m 755 "$WF/templates/hooks/pre-bash-guard.sh" "$TARGET/.codex/hooks/pre-bash-guard.sh"
+install -m 755 "$WF/templates/hooks/stop-ship-check.sh" "$TARGET/.codex/hooks/stop-ship-check.sh"
+install -m 644 "$WF/templates/codex/hooks.json" "$TARGET/.codex/hooks.json"
+
+# wrapper calls repo scripts/ai-brief
+cat > "$TARGET/.codex/hooks/session-start.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+exec bash "$ROOT/scripts/ai-brief"
+EOF
+chmod +x "$TARGET/.codex/hooks/session-start.sh"
+
+echo
+echo "=== done ==="
+echo "  1. cd $TARGET && codex"
+echo "  2. /hooks  → review and trust project hooks"
+echo "  3. SessionStart → ai-brief; Stop blocks if git dirty (scripts/ai-ship -m \"...\" [--mr])"
+echo
+echo "Still run scripts/ai-start once per task for index.jsonl + snapshot create."

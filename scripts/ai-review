@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE="${1:-origin/main}"
+if ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+  BASE="$(git branch --show-current 2>/dev/null || echo HEAD)"
+fi
+
+echo "=== ai-review ==="
+echo "base: $BASE"
+echo
+git diff --stat "$BASE"...HEAD 2>/dev/null || git diff --stat
+echo
+echo "Run a second agent on this diff only. Do not re-explore the full repo."
+echo "Suggested prompt:"
+cat <<EOF
+
+Review the diff against $BASE.
+Check: correctness, security, tests, scope creep, breaking changes.
+Output: blockers / suggestions / approve.
+
+EOF
+
+git diff "$BASE"...HEAD 2>/dev/null || git diff

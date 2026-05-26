@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WORK_ROOT="${AI_WORK_ROOT:-$HOME/projects}"
+INDEX="${AI_INDEX:-$HOME/.ai/logs/index.jsonl}"
+MODE="${1:-}"
+
+echo "=== tmux (live) ==="
+if command -v tmux >/dev/null 2>&1; then
+  tmux ls 2>/dev/null || echo "(no tmux sessions)"
+else
+  echo "(tmux not installed)"
+fi
+echo
+
+scan_repo() {
+  local repo="$1"
+  [ -d "$repo/.ai" ] || return 0
+  echo "--- $(basename "$repo") ($repo) ---"
+  if [ -f "$repo/.ai/active-tasks.md" ]; then
+    sed -n '/^|/p' "$repo/.ai/active-tasks.md" 2>/dev/null | head -20
+  fi
+  if [ -d "$repo/.ai/snapshots" ]; then
+    echo "snapshots:"
+    ls -1 "$repo/.ai/snapshots/" 2>/dev/null | sed 's/^/  /' || true
+  elif [ -f "$repo/.ai/SNAPSHOT.md" ]; then
+    echo "  SNAPSHOT.md (single-task)"
+  fi
+  echo
+}
+
+echo "=== repo tasks ==="
+if [ "$MODE" = "--all" ]; then
+  for repo in "$WORK_ROOT"/*; do
+    [ -d "$repo" ] || continue
+    scan_repo "$repo"
+  done
+elif [ -d .ai ]; then
+  scan_repo "$(pwd)"
+else
+  echo "(not in a repo with .ai/; use --all or cd into project)"
+fi
+
+echo "=== index.jsonl (recent) ==="
+if [ -f "$INDEX" ]; then
+  tail -n 15 "$INDEX"
+else
+  echo "(no $INDEX yet)"
+fi
+echo
+
+if [ "$MODE" = "--reconcile" ]; then
+  echo "=== reconcile (tmux vs index) ==="
+  export AI_INDEX="$INDEX"
+  python3 - <<'PY'
+import json, subprocess, os
+
+index = os.path.expanduser(os.environ.get("AI_INDEX", "~/.ai/logs/index.jsonl"))
+if not os.path.isfile(index):
+    raise SystemExit(0)
+try:
+    tmux = subprocess.check_output(["tmux", "ls"], text=True, stderr=subprocess.DEVNULL)
+    live = {line.split(":")[0] for line in tmux.splitlines()}
+except (subprocess.CalledProcessError, FileNotFoundError):
+    live = set()
+last = {}
+with open(index) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        key = (rec.get("repo_path"), rec.get("task"))
+        last[key] = rec
+for (_repo, task), rec in last.items():
+    if rec.get("status") != "active":
+        continue
+    sess = rec.get("tmux_session") or task
+    if sess not in live:
+        print(f"stale: {task} @ {rec.get('repo_path')} (tmux session '{sess}' not running)")
+PY
+fi
+
+echo "=== provider chats (manual) ==="
+echo "  claude --resume     # ~/.claude/projects/<path>/"
+echo "  codex               # OpenAI Codex CLI"

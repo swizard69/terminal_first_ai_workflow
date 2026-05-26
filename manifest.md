@@ -1,0 +1,4 @@
+project_name=terminal_first_ai_workflow
+repo_access=public
+project_type=meta
+framework_version=1.0.0

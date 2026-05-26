@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: ai-task <task-id> [repo-dir] [--project NAME] [--agent claude|codex] [--layout] [--no-branch]
+
+One-shot task start (wraps existing scripts — nothing removed):
+
+  ai-session  → tmux + AI_TASK
+  git branch  → ai/<task-id> (unless --no-branch)
+  ai-start    → snapshot + index
+  layout      → optional 3-pane (--layout)
+  attach      → you land in tmux; agent pane: run codex/claude (first time: /hooks trust)
+
+Resume existing session: same command → attach only (no duplicate ai-start).
+
+Examples:
+  ai-task fix-login $AI_WORK_ROOT/my-app --agent codex --layout
+  ai-task api-refactor $AI_WORK_ROOT/other-app --agent codex --layout
+EOF
+  exit 1
+}
+
+WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+TASK="${1:-}"
+[ -n "$TASK" ] || usage
+shift
+
+REPO="."
+PROJECT=""
+AGENT="codex"
+LAYOUT=false
+NO_BRANCH=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --project)   PROJECT="${2:?}"; shift 2 ;;
+    --agent)     AGENT="${2:?}"; shift 2 ;;
+    --layout)    LAYOUT=true; shift ;;
+    --no-branch) NO_BRANCH=true; shift ;;
+    -h|--help)   usage ;;
+    *)
+      if [ "$REPO" = "." ] && [ -d "$1" ]; then
+        REPO="$1"
+        shift
+      else
+        usage
+      fi
+      ;;
+  esac
+done
+
+REPO="$(cd "$REPO" && pwd)"
+[ -n "$PROJECT" ] || PROJECT="$(basename "$REPO")"
+
+if tmux has-session -t "$TASK" 2>/dev/null; then
+  echo "=== ai-task: attach existing session '$TASK' ==="
+  exec tmux attach -t "$TASK"
+fi
+
+echo "=== ai-task: new session '$TASK' ==="
+echo "repo:   $REPO"
+echo "agent:  $AGENT"
+echo
+
+BRANCH="ai/${TASK}"
+if [ "$NO_BRANCH" = false ] && [ -d "$REPO/.git" ]; then
+  if git -C "$REPO" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    git -C "$REPO" checkout "$BRANCH"
+    echo "branch: $BRANCH (existing)"
+  else
+    git -C "$REPO" checkout -b "$BRANCH"
+    echo "branch: $BRANCH (new)"
+  fi
+fi
+
+if [ -x "$REPO/scripts/ai-start" ]; then
+  echo "=== ai-start ==="
+  (cd "$REPO" && export AI_TASK="$TASK" AI_PROJECT="$PROJECT" && ./scripts/ai-start)
+else
+  echo "warn: no scripts/ai-start in repo — run bootstrap-project or sync-ai-scripts" >&2
+fi
+
+tmux new-session -ds "$TASK" -c "$REPO"
+tmux set-environment -t "$TASK" AI_TASK "$TASK"
+tmux set-environment -t "$TASK" TMUX_SESSION "$TASK"
+tmux set-environment -t "$TASK" AI_PROJECT "$PROJECT"
+tmux set-environment -t "$TASK" AI_AGENT "$AGENT"
+tmux set-option -t "$TASK" @ai_project "$PROJECT"
+tmux set-option -t "$TASK" @ai_agent "$AGENT"
+
+if [ "$LAYOUT" = true ]; then
+  AI_AGENT="$AGENT" "$WF/scripts/ai-tmux-layout" --session "$TASK" --repo "$REPO"
+  AGENT_PANE="${TASK}:0.1"
+  tmux send-keys -t "$AGENT_PANE" "clear" C-m
+  tmux send-keys -t "$AGENT_PANE" "echo 'run: $AGENT   (Codex first time: /hooks → trust)'" C-m
+  tmux select-pane -t "$AGENT_PANE"
+else
+  tmux send-keys -t "$TASK" "clear && echo 'AI_TASK=$TASK | run: scripts/ai-start (done) && $AGENT'" C-m
+fi
+
+echo
+echo "=== ready ==="
+echo "  attach: tmux attach -t $TASK"
+echo "  end:    ai-ship -m '...'  (Stop hook blocks if uncommitted)"
+echo "  also:   ai-finish, ai-start — still available"
+echo
+
+exec tmux attach -t "$TASK"

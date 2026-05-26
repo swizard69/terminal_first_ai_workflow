@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+EVENT="${1:?usage: ai-index-event <start|attach|checkpoint|finish|stale> [notes]}"
+NOTES="${2:-}"
+INDEX="${AI_INDEX:-$HOME/.ai/logs/index.jsonl}"
+mkdir -p "$(dirname "$INDEX")"
+
+TASK="${AI_TASK:-adhoc}"
+PROJECT="${AI_PROJECT:-$(basename "$(pwd)")}"
+REPO_PATH="$(pwd)"
+BRANCH="$(git branch --show-current 2>/dev/null || echo unknown)"
+SNAP=".ai/snapshots/${TASK}.md"
+[ -f "$SNAP" ] || SNAP=".ai/SNAPSHOT.md"
+
+case "$EVENT" in
+  start|attach|checkpoint) STATUS="active" ;;
+  finish) STATUS="finished" ;;
+  stale) STATUS="stale" ;;
+  *)
+    echo "unknown event: $EVENT" >&2
+    exit 1
+    ;;
+esac
+
+export EVENT PROJECT REPO_PATH TASK BRANCH SNAP STATUS NOTES
+export TMUX_SESSION="${TMUX_SESSION:-${TASK}}"
+export AGENT="${AI_AGENT:-unknown}"
+
+python3 - <<'PY' >> "$INDEX"
+import json, os, datetime, platform
+
+rec = {
+    "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "event": os.environ["EVENT"],
+    "machine": platform.node(),
+    "project": os.environ["PROJECT"],
+    "repo_path": os.environ["REPO_PATH"],
+    "task": os.environ["TASK"],
+    "tmux_session": os.environ["TMUX_SESSION"],
+    "agent": os.environ["AGENT"],
+    "branch": os.environ["BRANCH"],
+    "snapshot": os.environ["SNAP"],
+    "status": os.environ["STATUS"],
+}
+notes = os.environ.get("NOTES", "")
+if notes:
+    rec["notes"] = notes
+print(json.dumps(rec, ensure_ascii=False))
+PY

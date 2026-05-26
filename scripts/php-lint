@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: php-lint FILE.php [FILE.php ...]
+
+PHP syntax check via project docker image (manifest php_lint_image) or host php.
+
+manifest.md:
+  php_lint_image=project-web:latest
+  php_lint_workdir=/var/www/html    # optional, default /app
+
+On dev-ai there is usually no host php — docker image is the source of truth.
+EOF
+  exit 1
+}
+
+[ $# -gt 0 ] || usage
+
+case "${1:-}" in
+  -h|--help) usage ;;
+esac
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$root"
+
+read_manifest() {
+  local key="$1"
+  if [ -f manifest.md ]; then
+    grep -E "^${key}=" manifest.md 2>/dev/null | head -1 | cut -d= -f2- || true
+  fi
+}
+
+image="$(read_manifest php_lint_image)"
+workdir="$(read_manifest php_lint_workdir)"
+workdir="${workdir:-/app}"
+
+lint_one() {
+  local f="$1"
+  if [ ! -f "$f" ]; then
+    echo "error: not a file: $f" >&2
+    return 1
+  fi
+  if [ -n "$image" ]; then
+    docker run --rm -v "$root:$workdir" -w "$workdir" "$image" php -l "$f"
+  else
+    php -l "$f"
+  fi
+}
+
+if [ -n "$image" ]; then
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "warn: php_lint_image=$image not found locally" >&2
+    if command -v php >/dev/null 2>&1; then
+      echo "fallback: host php" >&2
+      image=""
+    else
+      echo "error: build/pull image or install host php" >&2
+      exit 1
+    fi
+  fi
+fi
+
+if [ -z "$image" ] && ! command -v php >/dev/null 2>&1; then
+  echo "error: no php_lint_image in manifest.md and no host php" >&2
+  echo "hint: add php_lint_image= to manifest.md (see scripts/php-lint --help)" >&2
+  exit 1
+fi
+
+for f in "$@"; do
+  lint_one "$f"
+done

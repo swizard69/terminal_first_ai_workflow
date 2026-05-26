@@ -1,0 +1,256 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Test → ai-finish index event → commit tracked changes → push.
+# MR merge stays human in GitLab/GitHub.
+
+usage() {
+  cat >&2 <<'EOF'
+usage: ai-ship [-m MESSAGE] [--all-new] [--no-test] [--no-push] [--mr] [--dry-run]
+
+Automates end-of-task git workflow (like Cursor agent commit+push).
+
+  -m, --message   commit message (required if changes exist)
+  --all-new       also stage untracked files (respects .gitignore)
+  --no-test       skip ai-test.local / ai-test
+  --no-push       commit only
+  --mr            after push, create MR/PR if none open (glab or gh)
+  --dry-run       show what would happen
+
+Env: AI_TASK, AI_COMMIT_MSG (fallback message), AI_SHIP_MR=1 (same as --mr)
+
+manifest.md (private-solo only):
+  git_flow=direct-master   allow commit+push on master/main; skip MR workflow
+  git_flow=mr              default — ai/<task> branches, optional --mr
+EOF
+  exit 1
+}
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+TASK="${AI_TASK:-}"
+if [ -z "$TASK" ] && [ -n "${TMUX:-}" ]; then
+  TASK="$(tmux display-message -p '#S')"
+  export AI_TASK="$TASK"
+fi
+
+MSG=""
+ALL_NEW=false
+RUN_TEST=true
+DO_PUSH=true
+CREATE_MR=false
+DRY_RUN=false
+
+case "${AI_SHIP_MR:-}" in
+  1|true|yes) CREATE_MR=true ;;
+esac
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m|--message) MSG="${2:?}"; shift 2 ;;
+    --all-new)    ALL_NEW=true; shift ;;
+    --no-test)    RUN_TEST=false; shift ;;
+    --no-push)    DO_PUSH=false; shift ;;
+    --mr)         CREATE_MR=true; shift ;;
+    --dry-run)    DRY_RUN=true; shift ;;
+    -h|--help)    usage ;;
+    *) usage ;;
+  esac
+done
+
+manifest_get() {
+  local key="$1"
+  [ -f manifest.md ] || return 0
+  grep -E "^${key}=" manifest.md 2>/dev/null | head -1 | cut -d= -f2- || true
+}
+
+GIT_FLOW="$(manifest_get git_flow)"
+REPO_ACCESS="$(manifest_get repo_access)"
+GIT_FLOW="${GIT_FLOW:-mr}"
+DIRECT_MASTER=false
+
+if [ "$GIT_FLOW" = "direct-master" ]; then
+  if [ "$REPO_ACCESS" != "private-solo" ]; then
+    echo "error: git_flow=direct-master requires repo_access=private-solo in manifest.md" >&2
+    exit 1
+  fi
+  DIRECT_MASTER=true
+  if [ "$CREATE_MR" = true ]; then
+    echo "note: --mr ignored (git_flow=direct-master)" >&2
+    CREATE_MR=false
+  fi
+fi
+
+git_remote_host() {
+  local url
+  url="$(git remote get-url origin 2>/dev/null || true)"
+  case "$url" in
+    *github.com*) echo github ;;
+    *gitlab*)     echo gitlab ;;
+    *)            echo unknown ;;
+  esac
+}
+
+mr_after_push() {
+  local branch="$1"
+  local host
+
+  if [ "$DIRECT_MASTER" = true ]; then
+    case "$branch" in
+      main|master)
+        echo "direct-master: pushed to $branch (no MR/PR)"
+        return 0
+        ;;
+    esac
+    echo "direct-master: pushed branch $branch"
+    echo "merge to master when ready:"
+    echo "  git checkout master && git pull && git merge $branch && git push origin master"
+    return 0
+  fi
+
+  host="$(git_remote_host)"
+
+  if [ "$host" = github ] && command -v gh >/dev/null 2>&1; then
+    if gh pr list --head "$branch" --state open 2>/dev/null | grep -q .; then
+      echo "PR:"
+      gh pr list --head "$branch" --state open 2>/dev/null | head -3
+      return 0
+    fi
+    if [ "$CREATE_MR" = true ]; then
+      echo "creating PR..."
+      gh pr create --fill
+      echo
+      gh pr list --head "$branch" --state open 2>/dev/null | head -3
+    else
+      echo "no open PR — create: gh pr create --fill  (or ai-ship --mr)"
+    fi
+    return 0
+  fi
+
+  if command -v glab >/dev/null 2>&1; then
+    if glab mr list --source-branch "$branch" 2>/dev/null | head -1 | grep -q .; then
+      echo "MR:"
+      glab mr list --source-branch "$branch" 2>/dev/null | head -3
+      return 0
+    fi
+    if [ "$CREATE_MR" = true ]; then
+      echo "creating MR..."
+      glab mr create --fill --yes
+      echo
+      glab mr list --source-branch "$branch" 2>/dev/null | head -3
+    else
+      echo "no open MR — create: glab mr create --fill  (or ai-ship --mr)"
+    fi
+    return 0
+  fi
+
+  case "$host" in
+    github) echo "hint: install gh and auth — gh pr create --fill" ;;
+    gitlab) echo "hint: install glab and auth — glab mr create --fill" ;;
+    *)      echo "hint: ai-ship --mr needs gh (GitHub) or glab (GitLab) on PATH" ;;
+  esac
+}
+
+[ -n "$MSG" ] || MSG="${AI_COMMIT_MSG:-}"
+
+BRANCH="$(git branch --show-current 2>/dev/null || true)"
+case "$BRANCH" in
+  main|master)
+    if [ "$DIRECT_MASTER" != true ]; then
+      echo "error: refuse commit on protected branch '$BRANCH' — use ai/<task> branch" >&2
+      echo "hint: private-solo repos may set git_flow=direct-master in manifest.md" >&2
+      exit 1
+    fi
+    ;;
+esac
+
+if [ "$RUN_TEST" = true ]; then
+  if [ -x ./scripts/ai-test.local ]; then
+    echo "=== ai-ship: ai-test.local ==="
+    ./scripts/ai-test.local
+  elif [ -x ./scripts/ai-test ]; then
+    echo "=== ai-ship: ai-test ==="
+    ./scripts/ai-test
+  fi
+fi
+
+if [ -x ./scripts/ai-finish ]; then
+  ./scripts/ai-finish >/dev/null || true
+elif command -v ai-index-event >/dev/null 2>&1; then
+  ai-index-event finish >/dev/null || true
+fi
+
+echo "=== ai-ship ==="
+echo "branch: ${BRANCH:-unknown}"
+[ -n "$TASK" ] && echo "task:   $TASK"
+[ "$DIRECT_MASTER" = true ] && echo "flow:   direct-master (solo, no MR)"
+echo
+
+if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+  :
+else
+  echo "nothing to commit"
+  exit 0
+fi
+
+git add -u
+if [ "$ALL_NEW" = true ]; then
+  mapfile -t NEW < <(git ls-files --others --exclude-standard)
+  if [ "${#NEW[@]}" -gt 0 ]; then
+    git add "${NEW[@]}"
+  fi
+fi
+
+if git diff --cached --quiet; then
+  echo "nothing staged (untracked only? use --all-new or git add manually)"
+  git status -sb
+  exit 0
+fi
+
+if [ -z "$MSG" ]; then
+  echo "error: commit message required (-m or AI_COMMIT_MSG)" >&2
+  git diff --cached --stat
+  exit 1
+fi
+
+echo "staged:"
+git diff --cached --stat
+echo
+
+if [ "$DRY_RUN" = true ]; then
+  echo "dry-run: would commit: $MSG"
+  if [ "$DO_PUSH" = true ]; then
+    echo "dry-run: would push origin HEAD"
+    if [ "$DIRECT_MASTER" = true ]; then
+      echo "dry-run: direct-master — no MR"
+    elif [ "$CREATE_MR" = true ]; then
+      host="$(git_remote_host)"
+      case "$host" in
+        github) echo "dry-run: would create PR if none open (gh pr create --fill)" ;;
+        *)      echo "dry-run: would create MR if none open (glab mr create --fill --yes)" ;;
+      esac
+    fi
+  fi
+  exit 0
+fi
+
+git commit -m "$MSG"
+
+if [ "$DO_PUSH" = true ]; then
+  git push -u origin HEAD
+  echo
+  mr_after_push "$BRANCH"
+fi
+
+echo
+if [ "$DIRECT_MASTER" = true ]; then
+  echo "done — direct-master (staging test → push; deploy --apply human)"
+else
+  host="$(git_remote_host)"
+  case "$host" in
+    github) echo "done — merge PR on GitHub when CI green (human)" ;;
+    gitlab) echo "done — merge MR in GitLab when CI green (human)" ;;
+    *)      echo "done — merge via MR/PR when CI green (human)" ;;
+  esac
+fi

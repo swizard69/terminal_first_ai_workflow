@@ -1,0 +1,22 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "{{AI_WORK_ROOT}}",
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-6",
+        "fallbacks": ["openai-codex/gpt-5.4"]
+      },
+      "models": {
+        "anthropic/claude-sonnet-4-6": { "alias": "Sonnet" },
+        "openai-codex/*": {}
+      }
+    },
+    "list": [
+      {
+        "id": "dev",
+        "name": "Dev",
+        "model": { "primary": "anthropic/claude-sonnet-4-6" }
+      }
+    ]
+  }
+}

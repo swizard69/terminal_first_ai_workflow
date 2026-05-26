@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_MODE="${1:-}"
+COMMIT_CHANGES=false
+
+if [ "${2:-}" = "--commit" ] || [ "${1:-}" = "--commit" ]; then
+  COMMIT_CHANGES=true
+fi
+
+case "$TARGET_MODE" in
+  public|private-shared|private-solo) ;;
+  *)
+    echo "Usage: switch-ai-state-mode <public|private-shared|private-solo> [--commit]"
+    exit 1
+    ;;
+esac
+
+MANIFEST="manifest.md"
+GITIGNORE=".gitignore"
+
+[ -f "$MANIFEST" ] || { echo "manifest.md not found" >&2; exit 1; }
+
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "tracked/staged changes must be clean before switching modes" >&2
+    exit 1
+  fi
+fi
+
+awk -F= -v mode="$TARGET_MODE" '
+  BEGIN { done=0 }
+  /^repo_access=/ { print "repo_access=" mode; done=1; next }
+  { print }
+  END { if (!done) print "repo_access=" mode }
+' "$MANIFEST" > "$MANIFEST.tmp"
+mv "$MANIFEST.tmp" "$MANIFEST"
+
+if [ -f "$GITIGNORE" ]; then
+  awk -v enable="$TARGET_MODE" '
+    BEGIN {
+      inside=0
+      uncomment=(enable=="public" || enable=="private-shared")
+    }
+    /^# >>> ai-framework-ignore$/ { inside=1; print; next }
+    /^# <<< ai-framework-ignore$/ { inside=0; print; next }
+    {
+      if (inside && $0 ~ /^# / && $0 !~ /^# Uncomment/) {
+        if (uncomment) sub(/^# /, "")
+      } else if (inside && $0 !~ /^# / && $0 !~ /^$/) {
+        if (!uncomment) $0 = "# " $0
+      }
+      print
+    }
+  ' "$GITIGNORE" > "$GITIGNORE.tmp"
+  mv "$GITIGNORE.tmp" "$GITIGNORE"
+fi
+
+echo "repo_access=$TARGET_MODE"
+
+case "$TARGET_MODE" in
+  private-solo)
+    echo "snapshots and .ai/ stay local (ensure .gitignore covers them)"
+    ;;
+  private-shared|public)
+    echo "snapshots may be committed — review .gitignore block"
+    ;;
+esac
+
+if [ "$COMMIT_CHANGES" = true ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git add "$MANIFEST" "$GITIGNORE" 2>/dev/null || git add "$MANIFEST"
+  git commit -m "chore(ai): switch repo_access to $TARGET_MODE"
+fi

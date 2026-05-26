@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: bootstrap-project [--name NAME] [--type TYPE] [TARGET_DIR]
+
+Initializes AGENTS.md, manifest, .ai/, docs/ai/, scripts/ in a repo.
+Default TARGET_DIR: current directory.
+
+Types: code (default), frontend, nuxt, vue, php-legacy, meta
+  frontend|nuxt|vue — ai-test.local.frontend + frontend docs stub
+  php-legacy          — ai-test.local.php-legacy
+EOF
+  exit 1
+}
+
+WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TPL="$WF/templates"
+TARGET="$(pwd)"
+NAME=""
+TYPE="code"
+PARALLEL=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --name) NAME="$2"; shift 2 ;;
+    --type) TYPE="$2"; shift 2 ;;
+    --parallel) PARALLEL=true; shift ;;
+    -h|--help) usage ;;
+    *)
+      TARGET="$(cd "$1" && pwd)"
+      shift
+      ;;
+  esac
+done
+
+[ -n "$NAME" ] || NAME="$(basename "$TARGET")"
+
+echo "=== bootstrap-project ==="
+echo "target: $TARGET"
+echo "name:   $NAME"
+echo "type:   $TYPE"
+
+cd "$TARGET"
+
+copy_if_missing() {
+  local src="$1" dst="$2"
+  if [ -f "$dst" ]; then
+    echo "  skip (exists): $dst"
+  else
+    mkdir -p "$(dirname "$dst")"
+    cp "$src" "$dst"
+    echo "  create: $dst"
+  fi
+}
+
+subst() {
+  local src="$1" dst="$2"
+  sed "s/{{PROJECT_NAME}}/$NAME/g; s/{{PROJECT_TYPE}}/$TYPE/g" "$src" > "$dst"
+}
+
+mkdir -p .ai/handoff .ai/rules .ai/skills .ai/hooks .ai/logs docs/ai scripts
+
+if [ -f AGENTS.md ]; then echo "  skip (exists): AGENTS.md"; else cp "$TPL/AGENTS.md" AGENTS.md; echo "  create: AGENTS.md"; fi
+if [ -f CLAUDE.md ]; then echo "  skip (exists): CLAUDE.md"; else subst "$TPL/CLAUDE.md" CLAUDE.md; echo "  create: CLAUDE.md"; fi
+if [ -f manifest.md ]; then echo "  skip (exists): manifest.md"; else subst "$TPL/manifest.md" manifest.md; echo "  create: manifest.md"; fi
+
+if [ "$PARALLEL" = true ]; then
+  copy_if_missing "$TPL/active-tasks.md" .ai/active-tasks.md
+  mkdir -p .ai/snapshots
+else
+  copy_if_missing "$TPL/SNAPSHOT.md" .ai/SNAPSHOT.md
+fi
+
+for doc in architecture conventions deploy; do
+  if [ ! -f "docs/ai/${doc}.md" ]; then
+    if [ "$doc" = "conventions" ] && case "$TYPE" in frontend|nuxt|vue) true ;; *) false ;; esac; then
+      cat > "docs/ai/conventions.md" <<'EOF'
+# conventions
+
+Frontend / Node project bootstrapped with terminal-first AI workflow.
+
+## Validation gate
+
+- After JS/TS/Vue edits: `./scripts/node-lint <files>` then `./scripts/node-lint --typecheck`.
+- Before ship: `./scripts/ai-test.local` (lint + typecheck + npm test).
+- Do not rely on IDE ESLint/TS alone on dev-ai.
+
+## manifest.md
+
+```ini
+node_lint_image=project-node:20    # when host Node ≠ project
+node_lint_workdir=/app
+node_lint_cmd=npm run lint         # optional override
+node_typecheck_cmd=npm run typecheck
+```
+
+## Style reference
+
+- Personal notes: `~/ai/vue-nuxt-style.md` (from bootstrap-host)
+- Project-specific UI rules belong in this file.
+EOF
+      echo "  create: docs/ai/conventions.md (frontend)"
+    else
+      cat > "docs/ai/${doc}.md" <<EOF
+# ${doc}
+
+<!-- project-specific; link from Obsidian if needed -->
+EOF
+      echo "  create: docs/ai/${doc}.md"
+    fi
+  fi
+done
+
+if [ ! -f docs/ai/context-load-order.md ]; then
+  cat > docs/ai/context-load-order.md <<'EOF'
+# Context load order
+
+1. AGENTS.md
+2. CLAUDE.md / CODEX.md
+3. manifest.md
+4. docs/ai/architecture.md
+5. docs/ai/conventions.md
+6. task snapshot (`.ai/SNAPSHOT.md` or `.ai/snapshots/<AI_TASK>.md`)
+EOF
+  echo "  create: docs/ai/context-load-order.md"
+fi
+
+for script in ai-context ai-start ai-finish ai-ship ai-brief ai-test php-lint python-lint node-lint ai-review ai-sync-skills switch-ai-state-mode ai-tmux-layout; do
+  if [ -f "scripts/$script" ]; then
+    echo "  skip (exists): scripts/$script"
+  else
+    cp "$WF/scripts/$script" "scripts/$script"
+    chmod +x "scripts/$script"
+    echo "  create: scripts/$script"
+  fi
+done
+
+if [ "$TYPE" = "php-legacy" ] && [ ! -f scripts/ai-test.local ]; then
+  cp "$TPL/ai-test.local.php-legacy" scripts/ai-test.local
+  chmod +x scripts/ai-test.local
+  echo "  create: scripts/ai-test.local (php-legacy template)"
+fi
+
+case "$TYPE" in
+  frontend|nuxt|vue)
+    if [ ! -f scripts/ai-test.local ]; then
+      cp "$TPL/ai-test.local.frontend" scripts/ai-test.local
+      chmod +x scripts/ai-test.local
+      echo "  create: scripts/ai-test.local (frontend template)"
+    fi
+    ;;
+esac
+
+if [ ! -f .gitignore ]; then
+  cat > .gitignore <<'EOF'
+# >>> ai-framework-ignore
+.ai/logs/
+.ai/handoff/
+# Uncomment for private-solo (default):
+.ai/snapshots/
+.ai/SNAPSHOT.md
+.ai/active-tasks.md
+# <<< ai-framework-ignore
+EOF
+  echo "  create: .gitignore"
+elif ! grep -q 'ai-framework-ignore' .gitignore 2>/dev/null; then
+  cat >> .gitignore <<'EOF'
+
+# >>> ai-framework-ignore
+.ai/logs/
+.ai/handoff/
+.ai/snapshots/
+.ai/SNAPSHOT.md
+.ai/active-tasks.md
+# <<< ai-framework-ignore
+EOF
+  echo "  append: .gitignore (ai-framework block)"
+fi
+
+echo
+echo "=== done ==="
+echo "  cd $TARGET"
+echo "  export AI_TASK=<task>   # or skip for single-task"
+echo "  ai-session <task> $TARGET --agent claude"
+echo "  scripts/ai-start"
+echo
+echo "Update scripts later: sync-ai-scripts ."

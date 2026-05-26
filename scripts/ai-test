@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run focused tests for the current repo. Extend per project in scripts/ai-test.local.
+
+case "${1:-}" in
+  -h|--help)
+    echo "usage: ai-test — run project tests (prefers scripts/ai-test.local)"
+    exit 0
+    ;;
+esac
+
+if [ -x ./scripts/ai-test.local ]; then
+  exec ./scripts/ai-test.local "$@"
+fi
+
+if [ -f composer.json ] && command -v composer >/dev/null 2>&1; then
+  if [ -f vendor/bin/phpunit ]; then
+    echo "=== phpunit ==="
+    vendor/bin/phpunit --no-configuration 2>/dev/null || vendor/bin/phpunit
+    exit $?
+  fi
+  if composer run-script --list 2>/dev/null | grep -qE '^\s+test\b'; then
+    echo "=== composer test ==="
+    composer test
+    exit $?
+  fi
+fi
+
+if [ -f package.json ] && command -v npm >/dev/null 2>&1; then
+  if node -e "const p=require('./package.json'); process.exit(p.scripts&&p.scripts.test?0:1)" 2>/dev/null; then
+    echo "=== npm test ==="
+    npm test
+    exit $?
+  fi
+fi
+
+if [ -f Makefile ] && grep -qE '^test:' Makefile 2>/dev/null; then
+  echo "=== make test ==="
+  make test
+  exit $?
+fi
+
+echo "no test runner detected — add scripts/ai-test.local or standard test command" >&2
+exit 1

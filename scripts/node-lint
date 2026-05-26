@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: node-lint [FILE...] [--typecheck] [--no-typecheck]
+
+Frontend / Node lint gate — ESLint, npm run lint, or custom command.
+Prefer this over IDE diagnostics on dev-ai.
+
+manifest.md:
+  node_lint_image=project-node:20       # optional docker image
+  node_lint_workdir=/app                # optional, default /app
+  node_lint_cmd=npm run lint            # optional override (whole project)
+  node_typecheck_cmd=npm run typecheck  # optional; also runs with --typecheck
+
+With FILE args: lints listed paths (eslint or tsc-friendly projects).
+Without FILE args: runs node_lint_cmd, else npm run lint, else npx eslint .
+
+Flags:
+  --typecheck     run node_typecheck_cmd or npm run typecheck when defined
+  --no-typecheck  skip typecheck even if configured in ai-test.local
+EOF
+  exit 1
+}
+
+case "${1:-}" in
+  -h|--help) usage ;;
+esac
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$root"
+
+read_manifest() {
+  local key="$1"
+  if [ -f manifest.md ]; then
+    grep -E "^${key}=" manifest.md 2>/dev/null | head -1 | cut -d= -f2- || true
+  fi
+}
+
+image="$(read_manifest node_lint_image)"
+workdir="$(read_manifest node_lint_workdir)"
+workdir="${workdir:-/app}"
+lint_cmd="$(read_manifest node_lint_cmd)"
+typecheck_cmd="$(read_manifest node_typecheck_cmd)"
+
+DO_TYPECHECK=false
+FILES=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --typecheck)    DO_TYPECHECK=true; shift ;;
+    --no-typecheck) DO_TYPECHECK=false; shift ;;
+    -h|--help)      usage ;;
+    *)
+      FILES+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ -f manifest.md ] && grep -q '^node_lint_typecheck=1' manifest.md 2>/dev/null; then
+  DO_TYPECHECK=true
+fi
+
+npm_has_script() {
+  local script="$1"
+  [ -f package.json ] || return 1
+  node -e "const p=require('./package.json'); process.exit(p.scripts&&p.scripts['$script']?0:1)" 2>/dev/null
+}
+
+run_in_env() {
+  local cmd="$1"
+  if [ -n "$image" ]; then
+    docker run --rm -v "$root:$workdir" -w "$workdir" "$image" sh -lc "$cmd"
+  else
+    sh -lc "$cmd"
+  fi
+}
+
+resolve_image() {
+  if [ -z "$image" ]; then
+    return 0
+  fi
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "warn: node_lint_image=$image not found locally" >&2
+  if command -v npm >/dev/null 2>&1; then
+    echo "fallback: host npm" >&2
+    image=""
+  else
+    echo "error: build/pull image or install host node/npm" >&2
+    exit 1
+  fi
+}
+
+resolve_image
+
+if [ -z "$image" ] && ! command -v npm >/dev/null 2>&1; then
+  echo "error: no node_lint_image in manifest.md and no host npm" >&2
+  echo "hint: add node_lint_image= or install Node.js" >&2
+  exit 1
+fi
+
+lint_files() {
+  local quoted="" f
+  for f in "$@"; do
+    if [ ! -f "$f" ]; then
+      echo "error: not a file: $f" >&2
+      return 1
+    fi
+    quoted="${quoted} $(printf '%q' "$f")"
+  done
+
+  if [ -n "$lint_cmd" ]; then
+    run_in_env "$lint_cmd"
+    return 0
+  fi
+
+  if npm_has_script lint; then
+    run_in_env "npm run lint --${quoted}"
+    return 0
+  fi
+
+  if [ -f eslint.config.js ] || [ -f eslint.config.mjs ] || [ -f eslint.config.cjs ] \
+    || [ -f .eslintrc.cjs ] || [ -f .eslintrc.js ] || [ -f .eslintrc.json ]; then
+    run_in_env "npx eslint${quoted}"
+    return 0
+  fi
+
+  echo "warn: no eslint config — skipping file lint (add node_lint_cmd or eslint)" >&2
+}
+
+lint_project() {
+  if [ -n "$lint_cmd" ]; then
+    echo "=== node-lint: $lint_cmd ==="
+    run_in_env "$lint_cmd"
+    return 0
+  fi
+
+  if npm_has_script lint; then
+    echo "=== node-lint: npm run lint ==="
+    run_in_env "npm run lint"
+    return 0
+  fi
+
+  if [ -f eslint.config.js ] || [ -f eslint.config.mjs ] || [ -f eslint.config.cjs ] \
+    || [ -f .eslintrc.cjs ] || [ -f .eslintrc.js ] || [ -f .eslintrc.json ]; then
+    echo "=== node-lint: npx eslint . ==="
+    run_in_env "npx eslint ."
+    return 0
+  fi
+
+  echo "error: no node_lint_cmd, npm run lint, or eslint config" >&2
+  echo "hint: set node_lint_cmd= in manifest.md or add eslint to the project" >&2
+  exit 1
+}
+
+run_typecheck() {
+  if [ -n "$typecheck_cmd" ]; then
+    echo "=== node-lint: $typecheck_cmd ==="
+    run_in_env "$typecheck_cmd"
+    return 0
+  fi
+  if npm_has_script typecheck; then
+    echo "=== node-lint: npm run typecheck ==="
+    run_in_env "npm run typecheck"
+    return 0
+  fi
+  if npm_has_script "check"; then
+    echo "=== node-lint: npm run check ==="
+    run_in_env "npm run check"
+    return 0
+  fi
+  if [ -f tsconfig.json ]; then
+    echo "=== node-lint: npx tsc --noEmit ==="
+    run_in_env "npx tsc --noEmit"
+    return 0
+  fi
+  echo "warn: no typecheck command (node_typecheck_cmd / npm run typecheck / tsconfig)" >&2
+}
+
+if [ "${#FILES[@]}" -gt 0 ]; then
+  lint_files "${FILES[@]}"
+else
+  lint_project
+fi
+
+if [ "$DO_TYPECHECK" = true ]; then
+  run_typecheck
+fi

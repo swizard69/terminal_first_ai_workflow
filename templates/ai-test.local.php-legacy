@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Copy to scripts/ai-test.local and adjust PHP_FILES for the project.
+
+PHP_FILES=(index.php)
+
+echo "=== php syntax ==="
+if [ -x ./scripts/php-lint ]; then
+  ./scripts/php-lint "${PHP_FILES[@]}"
+else
+  echo "warn: scripts/php-lint missing — run sync-ai-scripts" >&2
+fi
+
+if command -v docker >/dev/null 2>&1 && [ -f docker-compose.yml ]; then
+  echo "=== docker compose config ==="
+  docker compose config -q 2>/dev/null || docker compose config >/dev/null
+fi
+
+echo "ok: php-legacy smoke checks passed"

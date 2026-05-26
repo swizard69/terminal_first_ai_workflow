@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Bash syntax
+        run: |
+          for f in scripts/*; do
+            [ -f "$f" ] || continue
+            bash -n "$f"
+          done
+
+      - name: Shellcheck
+        run: shellcheck scripts/* || true
+
+      - name: Smoke tests
+        run: ./scripts/ai-test.local
+
+      - name: Framework readiness
+        run: |
+          mkdir -p .ai/snapshots
+          ./scripts/ai-openclaw-check .

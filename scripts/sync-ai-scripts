@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: sync-ai-scripts [TARGET_DIR] [--all] [--dry-run] [--force]
+
+Copy canonical AI lifecycle scripts from terminal_ai_workflow into project repos.
+
+Default TARGET_DIR: current directory (must contain scripts/ or AGENTS.md).
+
+  --all       sync every repo under AI_WORK_ROOT with scripts/ or AGENTS.md
+  --dry-run   show what would change
+  --force     overwrite even if destination differs (never touches ai-test.local)
+
+Global-only (PATH, not copied): ai-session, ai-sessions, ai-index-event,
+  bootstrap-host, bootstrap-project, sync-ai-scripts
+
+Project copies: ai-context, ai-start, ai-finish, ai-ship, ai-brief, ai-test, php-lint, python-lint, node-lint,
+  ai-review, ai-sync-skills, switch-ai-state-mode, ai-tmux-layout
+
+After framework updates:
+  sync-ai-scripts $AI_WORK_ROOT/my-app   # example repo path
+  sync-ai-scripts --all
+EOF
+  exit 1
+}
+
+WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WORK_ROOT="${AI_WORK_ROOT:-$HOME/projects}"
+
+SYNC_SCRIPTS=(
+  ai-context
+  ai-start
+  ai-finish
+  ai-ship
+  ai-brief
+  ai-test
+  php-lint
+  python-lint
+  node-lint
+  ai-review
+  ai-sync-skills
+  switch-ai-state-mode
+  ai-tmux-layout
+)
+
+MODE=""
+TARGET=""
+DRY_RUN=false
+FORCE=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --all)     MODE=all; shift ;;
+    --dry-run) DRY_RUN=true; shift ;;
+    --force)   FORCE=true; shift ;;
+    -h|--help) usage ;;
+    *)
+      if [ -z "$TARGET" ]; then
+        TARGET="$(cd "$1" && pwd)"
+      else
+        usage
+      fi
+      shift
+      ;;
+  esac
+done
+
+sync_repo() {
+  local repo="$1"
+  local name
+  name="$(basename "$repo")"
+  local dst="$repo/scripts"
+  local updated=0
+  local skipped=0
+
+  if [ ! -d "$repo/.git" ] && [ ! -f "$repo/AGENTS.md" ]; then
+    return 0
+  fi
+
+  if [ ! -d "$dst" ] && [ ! -f "$repo/AGENTS.md" ]; then
+    return 0
+  fi
+
+  echo "=== $name ($repo) ==="
+  mkdir -p "$dst"
+
+  local s src dstfile
+  for s in "${SYNC_SCRIPTS[@]}"; do
+    src="$WF/scripts/$s"
+    dstfile="$dst/$s"
+    if [ ! -f "$src" ]; then
+      echo "  skip (missing canonical): $s"
+      continue
+    fi
+    if [ -f "$dstfile" ] && cmp -s "$src" "$dstfile"; then
+      echo "  ok:   $s"
+      skipped=$((skipped + 1))
+      continue
+    fi
+    if [ -f "$dstfile" ] && [ "$FORCE" = false ] && [ "$DRY_RUN" = false ]; then
+      echo "  update: $s"
+    elif [ ! -f "$dstfile" ]; then
+      echo "  add:  $s"
+    else
+      echo "  would update: $s"
+    fi
+    if [ "$DRY_RUN" = false ]; then
+      cp "$src" "$dstfile"
+      chmod +x "$dstfile"
+      updated=$((updated + 1))
+    fi
+  done
+
+  if [ -f "$dst/ai-test.local" ]; then
+    echo "  keep: ai-test.local (project-specific)"
+  fi
+
+  echo "  summary: updated=$updated unchanged=$skipped"
+  echo
+}
+
+if [ "$MODE" = "all" ]; then
+  echo "=== sync-ai-scripts --all ==="
+  echo "canonical: $WF/scripts"
+  echo "scan:      $WORK_ROOT"
+  echo
+  found=0
+  for repo in "$WORK_ROOT"/*; do
+    [ -d "$repo" ] || continue
+    [ "$repo" = "$WF" ] && continue
+    if [ -d "$repo/scripts" ] || [ -f "$repo/AGENTS.md" ]; then
+      sync_repo "$repo"
+      found=$((found + 1))
+    fi
+  done
+  if [ "$found" -eq 0 ]; then
+    echo "(no repos with scripts/ or AGENTS.md under $WORK_ROOT)"
+  fi
+  exit 0
+fi
+
+if [ -z "$TARGET" ]; then
+  TARGET="$(pwd)"
+fi
+
+echo "=== sync-ai-scripts ==="
+echo "canonical: $WF/scripts"
+echo "target:    $TARGET"
+[ "$DRY_RUN" = true ] && echo "mode:      dry-run"
+echo
+
+sync_repo "$TARGET"

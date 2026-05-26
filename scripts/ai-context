@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Print files an agent must read before editing (Context Loading Protocol).
+
+case "${1:-}" in
+  -h|--help)
+    echo "usage: ai-context — print files to read before editing"
+    exit 0
+    ;;
+esac
+
+AI_WORK_ROOT="${AI_WORK_ROOT:-$HOME/projects}"
+TASK="${AI_TASK:-}"
+SNAP=""
+if [ -n "$TASK" ] && [ -f ".ai/snapshots/${TASK}.md" ]; then
+  SNAP=".ai/snapshots/${TASK}.md"
+elif [ -f .ai/SNAPSHOT.md ]; then
+  SNAP=".ai/SNAPSHOT.md"
+fi
+
+print_if() {
+  if [ -f "$1" ]; then
+    echo "  $1"
+  fi
+}
+
+echo "read order:"
+print_if AGENTS.md
+print_if CLAUDE.md
+print_if CODEX.md
+print_if manifest.md
+print_if docs/ai/context-load-order.md
+print_if docs/ai/architecture.md
+print_if docs/ai/conventions.md
+print_if docs/ai/deploy.md
+[ -n "$SNAP" ] && echo "  $SNAP"
+
+if [ -d .ai/rules ]; then
+  while IFS= read -r f; do
+    [ -n "$f" ] && echo "  $f"
+  done < <(find .ai/rules -type f -name '*.md' 2>/dev/null | sort || true)
+fi
+
+if [ -d "$HOME/ai" ]; then
+  print_if "$HOME/ai/global-rules.md"
+fi
+
+if [ -d "$HOME/ai/skills" ]; then
+  while IFS= read -r f; do
+    [ -n "$f" ] && echo "  $f"
+  done < <(find "$HOME/ai/skills" -mindepth 2 -name SKILL.md 2>/dev/null | sort || true)
+fi
+
+if [ -d .ai/skills ]; then
+  while IFS= read -r f; do
+    [ -n "$f" ] && echo "  $f"
+  done < <(find .ai/skills -mindepth 2 -name SKILL.md 2>/dev/null | sort || true)
+fi
+
+if [ -d "$AI_WORK_ROOT/ai-context" ]; then
+  while IFS= read -r f; do
+    [ -n "$f" ] && echo "  $f"
+  done < <(find "$AI_WORK_ROOT/ai-context" -maxdepth 1 -type f -name '*.md' 2>/dev/null | sort || true)
+fi

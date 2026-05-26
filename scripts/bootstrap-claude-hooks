@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: bootstrap-claude-hooks [TARGET_DIR]
+
+Installs .claude/settings.json (hooks) + .claude/hooks/ for Claude Code.
+Project settings — no /hooks trust step (unlike Codex).
+
+Also ensures scripts/ai-brief exists in project.
+Merges hooks into existing .claude/settings.json if present.
+EOF
+  exit 1
+}
+
+WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TARGET="$(pwd)"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage ;;
+    *)
+      TARGET="$(cd "$1" && pwd)"
+      shift
+      ;;
+  esac
+done
+
+echo "=== bootstrap-claude-hooks ==="
+echo "target: $TARGET"
+
+mkdir -p "$TARGET/.claude/hooks" "$TARGET/scripts"
+
+if [ ! -f "$TARGET/scripts/ai-brief" ]; then
+  cp "$WF/scripts/ai-brief" "$TARGET/scripts/ai-brief"
+  chmod +x "$TARGET/scripts/ai-brief"
+  echo "  create: scripts/ai-brief"
+else
+  echo "  skip: scripts/ai-brief"
+fi
+
+install -m 755 "$WF/templates/claude/hooks/session-start.sh" "$TARGET/.claude/hooks/session-start.sh"
+install -m 755 "$WF/templates/hooks/pre-bash-guard.sh" "$TARGET/.claude/hooks/pre-bash-guard.sh"
+install -m 755 "$WF/templates/hooks/stop-ship-check.sh" "$TARGET/.claude/hooks/stop-ship-check.sh"
+
+SETTINGS="$TARGET/.claude/settings.json"
+TEMPLATE="$WF/templates/claude/settings.json"
+
+if [ ! -f "$SETTINGS" ]; then
+  install -m 644 "$TEMPLATE" "$SETTINGS"
+  echo "  create: .claude/settings.json"
+else
+  python3 - "$SETTINGS" "$TEMPLATE" <<'PY'
+import json, sys
+settings_path, template_path = sys.argv[1], sys.argv[2]
+with open(settings_path) as f:
+    data = json.load(f)
+with open(template_path) as f:
+    tpl = json.load(f)
+data["hooks"] = tpl["hooks"]
+with open(settings_path, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+PY
+  echo "  merge:  hooks → .claude/settings.json"
+fi
+
+echo
+echo "=== done ==="
+echo "  cd $TARGET && claude"
+echo "  SessionStart injects scripts/ai-brief (startup|resume|clear|compact)"
+echo
+echo "Still run scripts/ai-start once per task for index.jsonl + snapshot create."
+echo "End work: scripts/ai-ship -m \"type(scope): summary\" [--mr]"
+echo "Commit .claude/settings.json + .claude/hooks/ in project MR."

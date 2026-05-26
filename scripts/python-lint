@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: python-lint FILE.py [FILE.py ...]
+
+Python syntax check via project docker image (manifest python_lint_image) or host python.
+
+manifest.md:
+  python_lint_image=project-app:latest
+  python_lint_workdir=/app                # optional, default /app
+
+On dev-ai there is usually no host python — docker image is the source of truth.
+EOF
+  exit 1
+}
+
+[ $# -gt 0 ] || usage
+
+case "${1:-}" in
+  -h|--help) usage ;;
+esac
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$root"
+
+read_manifest() {
+  local key="$1"
+  if [ -f manifest.md ]; then
+    grep -E "^${key}=" manifest.md 2>/dev/null | head -1 | cut -d= -f2- || true
+  fi
+}
+
+image="$(read_manifest python_lint_image)"
+workdir="$(read_manifest python_lint_workdir)"
+workdir="${workdir:-/app}"
+
+lint_one() {
+  local f="$1"
+  if [ ! -f "$f" ]; then
+    echo "error: not a file: $f" >&2
+    return 1
+  fi
+  if [ -n "$image" ]; then
+    docker run --rm -v "$root:$workdir" -w "$workdir" "$image" python -m py_compile "$f"
+  else
+    python3 -m py_compile "$f"
+  fi
+}
+
+if [ -n "$image" ]; then
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "warn: python_lint_image=$image not found locally" >&2
+    if command -v python3 >/dev/null 2>&1; then
+      echo "fallback: host python3" >&2
+      image=""
+    else
+      echo "error: build/pull image or install host python3" >&2
+      exit 1
+    fi
+  fi
+fi
+
+if [ -z "$image" ] && ! command -v python3 >/dev/null 2>&1; then
+  echo "error: no python_lint_image in manifest.md and no host python3" >&2
+  echo "hint: add python_lint_image= to manifest.md (see scripts/python-lint --help)" >&2
+  exit 1
+fi
+
+for f in "$@"; do
+  lint_one "$f"
+done
