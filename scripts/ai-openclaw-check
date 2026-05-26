@@ -113,7 +113,7 @@ check_host() {
     bad "ai-session not in PATH (bootstrap-host?)"
   fi
 
-  if [ -d "$WORK_ROOT" ]; then ok "AI_WORK_ROOT=$WORK_ROOT"; else bad "AI_WORK_ROOT missing: $WORK_ROOT"; fi
+  if [ -d "$WORK_ROOT" ]; then ok "AI_WORK_ROOT=$WORK_ROOT"; else bad "AI_WORK_ROOT missing: $WORK_ROOT (bootstrap-host or mkdir)"; fi
 
   if [ "$GATEWAY" = true ]; then
     if command -v openclaw >/dev/null 2>&1; then
