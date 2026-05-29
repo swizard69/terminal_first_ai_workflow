@@ -411,6 +411,23 @@ Then:
 
 ---
 
+## Remove Framework From Repo
+
+Bootstrap is additive; removal is explicit:
+
+```bash
+unbootstrap-project $AI_WORK_ROOT/<repo> --dry-run
+unbootstrap-project $AI_WORK_ROOT/<repo> --yes --keep-snapshots
+```
+
+Uses `.ai/framework-manifest` when present (written by `bootstrap-project` and hook
+installers). See [scripts-sync.md](../scripts-sync.md#remove-framework-from-repo).
+
+Global tools (`ai-session`, `ai-task`, skills in `~/ai/skills/`) are **not** in the repo
+and stay on the host.
+
+---
+
 ## Important
 
 Do not become Claude-specific.

@@ -17,6 +17,8 @@ EOF
 
 WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TPL="$WF/templates"
+# shellcheck source=_framework-manifest.sh
+source "$WF/scripts/_framework-manifest.sh"
 TARGET="$(pwd)"
 NAME=""
 TYPE="code"
@@ -43,6 +45,8 @@ echo "name:   $NAME"
 echo "type:   $TYPE"
 
 cd "$TARGET"
+ROOT="$(fm_target_root "$TARGET")"
+fm_init "$ROOT"
 
 copy_if_missing() {
   local src="$1" dst="$2"
@@ -53,6 +57,7 @@ copy_if_missing() {
     cp "$src" "$dst"
     echo "  create: $dst"
   fi
+  fm_add "$ROOT" "$dst"
 }
 
 subst() {
@@ -102,6 +107,7 @@ node_typecheck_cmd=npm run typecheck
 - Project-specific UI rules belong in this file.
 EOF
       echo "  create: docs/ai/conventions.md (frontend)"
+      fm_add "$ROOT" docs/ai/conventions.md
     else
       cat > "docs/ai/${doc}.md" <<EOF
 # ${doc}
@@ -109,6 +115,7 @@ EOF
 <!-- project-specific; link from Obsidian if needed -->
 EOF
       echo "  create: docs/ai/${doc}.md"
+      fm_add "$ROOT" "docs/ai/${doc}.md"
     fi
   fi
 done
@@ -125,6 +132,7 @@ if [ ! -f docs/ai/context-load-order.md ]; then
 6. task snapshot (`.ai/SNAPSHOT.md` or `.ai/snapshots/<AI_TASK>.md`)
 EOF
   echo "  create: docs/ai/context-load-order.md"
+  fm_add "$ROOT" docs/ai/context-load-order.md
 fi
 
 for script in ai-context ai-start ai-finish ai-ship ai-brief ai-test php-lint python-lint node-lint ai-review ai-sync-skills switch-ai-state-mode ai-tmux-layout; do
@@ -135,6 +143,7 @@ for script in ai-context ai-start ai-finish ai-ship ai-brief ai-test php-lint py
     chmod +x "scripts/$script"
     echo "  create: scripts/$script"
   fi
+  fm_add "$ROOT" "scripts/$script"
 done
 
 if [ "$TYPE" = "php-legacy" ] && [ ! -f scripts/ai-test.local ]; then
@@ -179,6 +188,13 @@ EOF
   echo "  append: .gitignore (ai-framework block)"
 fi
 
+for d in .ai/handoff .ai/rules .ai/skills .ai/hooks .ai/logs; do
+  fm_add_dir "$ROOT" "$d"
+done
+[ -d .ai/snapshots ] && fm_add_dir "$ROOT" .ai/snapshots
+[ -f .ai/SNAPSHOT.md ] && fm_add "$ROOT" .ai/SNAPSHOT.md
+[ -f .ai/active-tasks.md ] && fm_add "$ROOT" .ai/active-tasks.md
+
 echo
 echo "=== done ==="
 echo "  cd $TARGET"
@@ -187,3 +203,4 @@ echo "  ai-session <task> $TARGET --agent claude"
 echo "  scripts/ai-start"
 echo
 echo "Update scripts later: sync-ai-scripts ."
+echo "Remove framework:      unbootstrap-project $TARGET --dry-run"

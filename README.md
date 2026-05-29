@@ -17,6 +17,7 @@ automation scripts — no manual copy-paste:
 - **`bootstrap-project`** — `AGENTS.md`, `manifest.md`, `.ai/`, `docs/ai/`, project `scripts/`
 - **`bootstrap-codex-hooks`** / **`bootstrap-claude-hooks`** — agent SessionStart hooks
 - **`sync-ai-scripts`** — refresh lifecycle scripts after framework updates (`--all` for every repo)
+- **`unbootstrap-project`** — remove framework files from a repo (dry-run by default)
 - **`bootstrap-ai-skills`** — global + project skills
 
 See [Install](#install) below.

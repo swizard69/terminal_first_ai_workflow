@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: unbootstrap-project [TARGET_DIR] [--yes] [--dry-run]
+       [--purge-root-docs] [--purge-docs-ai] [--keep-snapshots]
+
+Remove terminal-ai-workflow files from a project repo.
+
+Default without --yes: dry-run (list only).
+
+Reads .ai/framework-manifest when present (paths installed by bootstrap-*).
+Falls back to a built-in list for older bootstraps.
+
+  --yes              delete files; required for real removal
+  --dry-run          list paths only; default if --yes not set
+  --purge-root-docs  also remove AGENTS.md, CLAUDE.md, manifest.md
+  --purge-docs-ai    also remove docs/ai/
+  --keep-snapshots   keep .ai/snapshots/, .ai/SNAPSHOT.md, .ai/active-tasks.md
+
+Does not touch: scripts/ai-test.local - project-owned; unrelated project code.
+Global PATH tools (ai-session, ai-task) stay on the host, not in repo.
+
+Example:
+  unbootstrap-project ~/work/projects/wm-ukr --dry-run
+  unbootstrap-project ~/work/projects/wm-ukr --yes --keep-snapshots
+EOF
+  exit 1
+}
+
+WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=_framework-manifest.sh
+source "$WF/scripts/_framework-manifest.sh"
+
+TARGET="$(pwd)"
+DO_YES=false
+DRY_RUN=false
+PURGE_ROOT=false
+PURGE_DOCS=false
+KEEP_SNAPS=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --yes)            DO_YES=true; shift ;;
+    --dry-run)        DRY_RUN=true; shift ;;
+    --purge-root-docs) PURGE_ROOT=true; shift ;;
+    --purge-docs-ai)  PURGE_DOCS=true; shift ;;
+    --keep-snapshots) KEEP_SNAPS=true; shift ;;
+    -h|--help)        usage ;;
+    *)
+      TARGET="$(cd "$1" && pwd)"
+      shift
+      ;;
+  esac
+done
+
+if [ "$DO_YES" = true ] && [ "$DRY_RUN" = true ]; then
+  echo "error: use either --yes or --dry-run, not both" >&2
+  exit 1
+fi
+
+if [ "$DO_YES" = false ]; then
+  DRY_RUN=true
+fi
+
+ROOT="$(fm_target_root "$TARGET")"
+cd "$ROOT"
+WF_ROOT="$(cd "$WF" && pwd)"
+
+DEFAULT_PATHS=(
+  .codex/
+  .claude/
+  scripts/ai-context
+  scripts/ai-start
+  scripts/ai-finish
+  scripts/ai-ship
+  scripts/ai-brief
+  scripts/ai-test
+  scripts/php-lint
+  scripts/python-lint
+  scripts/node-lint
+  scripts/ai-review
+  scripts/ai-sync-skills
+  scripts/switch-ai-state-mode
+  scripts/ai-tmux-layout
+  .ai/handoff/
+  .ai/hooks/
+  .ai/rules/
+  .ai/logs/
+  .ai/skills/
+  .ai/framework-manifest
+)
+
+MANIFEST_PATHS=()
+if [ -f .ai/framework-manifest ]; then
+  while IFS= read -r _line; do
+    case "$_line" in
+      ''|\#*) continue ;;
+    esac
+    MANIFEST_PATHS+=("$_line")
+  done < .ai/framework-manifest
+fi
+
+use_manifest=false
+if [ "${#MANIFEST_PATHS[@]}" -gt 0 ]; then
+  use_manifest=true
+fi
+
+should_skip() {
+  local rel="$1"
+  [ "$KEEP_SNAPS" = true ] || return 1
+  case "$rel" in
+    .ai/SNAPSHOT.md|.ai/active-tasks.md|.ai/snapshots/) return 0 ;;
+  esac
+  [[ "$rel" == .ai/snapshots/* ]] && return 0
+  return 1
+}
+
+if [ "$ROOT" = "$WF_ROOT" ] && [ ! -f .ai/framework-manifest ]; then
+  echo "error: target is the framework repo; unbootstrap is for bootstrapped project repos" >&2
+  exit 1
+fi
+
+collect_paths() {
+  COLLECTED_PATHS=()
+  local p
+
+  if [ "$use_manifest" = true ]; then
+    for p in "${MANIFEST_PATHS[@]}"; do
+      should_skip "$p" && continue
+      COLLECTED_PATHS+=("$p")
+    done
+  else
+    echo "note: no .ai/framework-manifest — using built-in default list" >&2
+    for p in "${DEFAULT_PATHS[@]}"; do
+      should_skip "$p" && continue
+      COLLECTED_PATHS+=("$p")
+    done
+    if [ "$PURGE_ROOT" = true ]; then
+      COLLECTED_PATHS+=(AGENTS.md CLAUDE.md manifest.md)
+    fi
+    if [ "$PURGE_DOCS" = true ]; then
+      COLLECTED_PATHS+=(docs/ai/)
+    fi
+    if [ "$KEEP_SNAPS" = false ]; then
+      COLLECTED_PATHS+=(.ai/snapshots/ .ai/SNAPSHOT.md .ai/active-tasks.md)
+    fi
+  fi
+
+  if [ "$use_manifest" = true ]; then
+    if [ "$PURGE_ROOT" = true ]; then
+      for p in AGENTS.md CLAUDE.md manifest.md; do
+        COLLECTED_PATHS+=("$p")
+      done
+    fi
+    if [ "$PURGE_DOCS" = true ]; then
+      COLLECTED_PATHS+=(docs/ai/)
+    fi
+  fi
+}
+
+remove_path() {
+  local rel="$1"
+  [ -e "$rel" ] || [ -L "$rel" ] || return 0
+
+  if [[ "$rel" == */ ]]; then
+    rm -rf "$rel"
+  elif [ -d "$rel" ]; then
+    rm -rf "$rel"
+  else
+    rm -f "$rel"
+  fi
+}
+
+TO_REMOVE=()
+collect_paths
+TO_REMOVE=("${COLLECTED_PATHS[@]}")
+
+# De-dupe while preserving order
+declare -A SEEN=()
+UNIQUE=()
+for p in "${TO_REMOVE[@]}"; do
+  [ -n "$p" ] || continue
+  [ "${SEEN[$p]+x}" = "x" ] && continue
+  SEEN[$p]=1
+  UNIQUE+=("$p")
+done
+
+if [ "$DRY_RUN" = true ]; then
+  MODE_LABEL=dry-run
+else
+  MODE_LABEL=delete
+fi
+
+echo "=== unbootstrap-project ==="
+echo "target: $ROOT"
+echo "mode:   $MODE_LABEL"
+echo
+
+if [ "${#UNIQUE[@]}" -eq 0 ]; then
+  echo "nothing to remove"
+  exit 0
+fi
+
+for p in "${UNIQUE[@]}"; do
+  if [ -e "$p" ] || [ -L "$p" ]; then
+    echo "  remove: $p"
+  else
+    echo "  skip (missing): $p"
+  fi
+done
+
+if grep -q 'ai-framework-ignore' .gitignore 2>/dev/null; then
+  echo "  strip:  .gitignore (ai-framework-ignore block)"
+fi
+
+if [ "$DRY_RUN" = true ]; then
+  echo
+  echo "dry-run — re-run with --yes to delete"
+  exit 0
+fi
+
+for p in "${UNIQUE[@]}"; do
+  remove_path "$p"
+done
+
+if [ -f .gitignore ]; then
+  fm_strip_gitignore_block .gitignore
+fi
+
+# Remove empty .ai if nothing left
+if [ -d .ai ] && ! find .ai -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
+  rmdir .ai 2>/dev/null || true
+fi
+
+echo
+echo "=== done ==="
+echo "Framework removed from repo. Global tools remain on PATH (ai-session, ai-task, ...)."
+echo "Re-install: bootstrap-project $ROOT"

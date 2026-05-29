@@ -14,6 +14,8 @@ EOF
 }
 
 WF="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=_framework-manifest.sh
+source "$WF/scripts/_framework-manifest.sh"
 TARGET="$(pwd)"
 
 while [ $# -gt 0 ]; do
@@ -52,10 +54,20 @@ exec bash "$ROOT/scripts/ai-brief"
 EOF
 chmod +x "$TARGET/.codex/hooks/session-start.sh"
 
+ROOT="$(fm_target_root "$TARGET")"
+fm_init "$ROOT"
+fm_add "$ROOT" .codex/hooks.json
+fm_add "$ROOT" .codex/hooks/pre-bash-guard.sh
+fm_add "$ROOT" .codex/hooks/stop-ship-check.sh
+fm_add "$ROOT" .codex/hooks/session-start.sh
+fm_add_dir "$ROOT" .codex/
+
 echo
 echo "=== done ==="
 echo "  1. cd $TARGET && codex"
 echo "  2. /hooks  → review and trust project hooks"
 echo "  3. SessionStart → ai-brief; Stop blocks if git dirty (scripts/ai-ship -m \"...\" [--mr])"
+echo
+echo "Remove hooks: unbootstrap-project $TARGET --yes"
 echo
 echo "Still run scripts/ai-start once per task for index.jsonl + snapshot create."

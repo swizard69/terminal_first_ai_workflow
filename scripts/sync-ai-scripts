@@ -14,7 +14,7 @@ Default TARGET_DIR: current directory (must contain scripts/ or AGENTS.md).
   --force     overwrite even if destination differs (never touches ai-test.local)
 
 Global-only (PATH, not copied): ai-session, ai-sessions, ai-index-event,
-  bootstrap-host, bootstrap-project, sync-ai-scripts
+  bootstrap-host, bootstrap-project, sync-ai-scripts, unbootstrap-project
 
 Project copies: ai-context, ai-start, ai-finish, ai-ship, ai-brief, ai-test, php-lint, python-lint, node-lint,
   ai-review, ai-sync-skills, switch-ai-state-mode, ai-tmux-layout

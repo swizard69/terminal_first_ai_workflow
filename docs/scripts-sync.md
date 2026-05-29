@@ -33,6 +33,7 @@ bootstrap-codex-hooks
 bootstrap-claude-hooks
 bootstrap-ai-skills
 sync-ai-scripts
+unbootstrap-project
 ```
 
 Cross-repo / tmux helpers — once in PATH.
@@ -74,7 +75,31 @@ scripts/ai-test.local   # project smoke tests
   $AI_WORK_ROOT/my-app --name my-app --type code
 ```
 
-Creates copies **only if the file does not exist** (does not update existing).
+Creates copies **only if the file does not exist** (does not update existing).  
+Writes `.ai/framework-manifest` — path list for `unbootstrap-project`.
+
+---
+
+## Remove framework from repo
+
+```bash
+unbootstrap-project $AI_WORK_ROOT/my-app --dry-run
+unbootstrap-project $AI_WORK_ROOT/my-app --yes --keep-snapshots
+```
+
+Default without `--yes` — preview only.
+
+| Flag | Effect |
+|------|--------|
+| `--yes` | delete |
+| `--keep-snapshots` | keep `.ai/snapshots/`, `SNAPSHOT.md`, `active-tasks.md` |
+| `--purge-root-docs` | also `AGENTS.md`, `CLAUDE.md`, `manifest.md` |
+| `--purge-docs-ai` | also `docs/ai/` |
+
+**Does not remove:** `scripts/ai-test.local` (project-owned).  
+**Does not touch:** global PATH tools (`ai-session`, `ai-task`, …) on the host.
+
+After removal — normal git commit in the project repo.
 
 ---
 
