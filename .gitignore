@@ -1,12 +1,2 @@
 _external/
 ._*
-
-# >>> ai-framework-ignore
-.ai/logs/
-.ai/handoff/
-# Uncomment for private-solo (default):
-.ai/snapshots/*
-!.ai/snapshots/.gitkeep
-.ai/SNAPSHOT.md
-.ai/active-tasks.md
-# <<< ai-framework-ignore
